@@ -98,7 +98,7 @@ export async function meView() {
     title: 'Edit profile',
     fields: [
       { name: 'display_name', label: 'Display name', value: me.display_name || '' },
-      { name: 'bio', label: 'Bio', type: 'textarea', rows: 4, value: me.bio || '', placeholder: 'Tell people a little about yourself' },
+      { name: 'bio', label: 'Bio', type: 'textarea', rows: 4, value: me.bio || '', placeholder: 'Tell people a little about yourself', allowClear: true },
     ],
     submit: 'Save changes',
     onSubmit: async (body) => {

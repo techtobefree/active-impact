@@ -21,6 +21,7 @@ export function popReturn() {
   sessionStorage.removeItem(RETURN_KEY);
   return r && r !== '#/login' && r !== '#/register' ? r : '#/';
 }
+export function peekReturn() { return sessionStorage.getItem(RETURN_KEY); }
 
 // api(path, {method, body}) -> parsed JSON (or null on 204).
 // Throws {status, detail} on non-2xx, {offline:true} on network failure.
@@ -40,15 +41,17 @@ export async function api(path, opts = {}) {
     throw { offline: true, detail: 'offline' };
   }
   if (res.status === 401) {
-    // A 401 WITH a bearer token = the session expired: clear it, stash the route,
-    // and bounce to login. A 401 WITHOUT a token is a form error (e.g. a wrong
-    // password on /auth/login) — surface the server's detail to the form instead.
+    // A 401 WITH a bearer token = the session expired. Clear it and stash the
+    // route, but DON'T navigate here: a submit-time expiry would wipe whatever
+    // the user has typed. The error surfaces in place ("Your session expired"),
+    // and the router's auth-gate redirects on the next navigation; view-load
+    // failures are redirected by render()'s catch (sessionExpired flag).
     if (tok) {
       clearSession();
       stashReturn();
-      if (location.hash !== '#/login') location.hash = '#/login';
-      throw { status: 401, detail: 'unauthorized' };
+      throw { status: 401, detail: 'invalid_token', sessionExpired: true };
     }
+    // No token = a form error (e.g. wrong password): surface the server's detail.
     let detail = 'unauthorized';
     try { const d = await res.json(); if (d && d.detail) detail = d.detail; } catch { /* keep default */ }
     throw { status: 401, detail };

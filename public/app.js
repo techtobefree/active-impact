@@ -16,7 +16,9 @@ const routes = [
   [/^#\/projects\/new$/, projects.newView],
   [/^#\/projects\/(\d+)$/, projects.detailView],
   [/^#\/projects\/(\d+)\/lead$/, projects.leadView],
-  [/^#\/c\/([\w-]+)$/, checkin.checkinView],
+  // Deliberately loose: a mangled QR/URL code must reach the check-in view's
+  // friendly "invalid code" card, not silently fall through to the home screen.
+  [/^#\/c\/(.+)$/, checkin.checkinView],
   [/^#\/catalog$/, catalog.listView],
   [/^#\/catalog\/new$/, catalog.newView],
   [/^#\/catalog\/(\d+)$/, catalog.detailView],
@@ -80,7 +82,7 @@ export async function render() {
   try {
     await view(...groups);
   } catch (e) {
-    if (e && (e.detail === 'unauthorized')) return; // api() already redirected
+    if (e && e.sessionExpired) { location.hash = '#/login'; return; } // view load with a dead session
     mount(errorCard(e));
   }
 }
@@ -89,15 +91,28 @@ export async function render() {
 export function refresh() { return render(); }
 
 // Auto-reload an open tab when a new build is deployed, so it never runs stale
-// code. /api/version changes on every server (re)start.
+// code. /api/version changes on every server (re)start. Two safety rules:
+// 1. NEVER reload while the user has typed into a form (a reload would wipe it);
+//    retry on the next check instead.
+// 2. Purge SW caches before reloading so the reload fetches the NEW bundle,
+//    never the old cached shell (belt-and-braces with the network-first SW).
 let BUILD = null;
+function formIsDirty() {
+  return [...document.querySelectorAll('#view input, #view textarea')]
+    .some((i) => i.value !== '' && i.value !== i.defaultValue);
+}
 async function checkVersion() {
   try {
     const r = await fetch('/api/version', { cache: 'no-store' });
     if (!r.ok) return;
     const { version } = await r.json();
-    if (BUILD === null) BUILD = version;
-    else if (version !== BUILD) location.reload();
+    if (BUILD === null) { BUILD = version; return; }
+    if (version !== BUILD && !formIsDirty()) {
+      if ('caches' in window) {
+        try { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } catch { /* ignore */ }
+      }
+      location.reload();
+    }
   } catch { /* offline — ignore */ }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });

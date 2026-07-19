@@ -80,17 +80,15 @@ export async function listView() {
 
   function renderResults() {
     clear(results);
-    const q = query.trim().toLowerCase();
-    const filtered = q ? items.filter((it) => (it.title || '').toLowerCase().includes(q)) : items;
-    if (!filtered.length) {
+    if (!items.length) {
       results.append(emptyState(
-        q ? 'Nothing matches your search.'
+        query.trim() ? 'Nothing matches your search.'
           : kind === 'offer' ? 'No offers yet. Post the first one.'
           : 'No needs yet. Post the first one.',
       ));
       return;
     }
-    for (const it of filtered) results.append(listCardEl(it));
+    for (const it of items) results.append(listCardEl(it));
   }
 
   async function load() {
@@ -99,7 +97,9 @@ export async function listView() {
     clear(results);
     results.append(spinner());
     try {
-      items = await api(`/catalog?kind=${kind}`);
+      // Server-side search: client filtering would only ever see the first page.
+      const q = query.trim() ? `&q=${encodeURIComponent(query.trim())}` : '';
+      items = await api(`/catalog?kind=${kind}${q}`);
       renderResults();
     } catch (e) {
       clear(results);
@@ -108,9 +108,14 @@ export async function listView() {
     }
   }
 
+  let searchTimer;
   offerTab.onclick = () => { if (kind !== 'offer') { kind = 'offer'; load(); } };
   needTab.onclick = () => { if (kind !== 'need') { kind = 'need'; load(); } };
-  search.oninput = () => { query = search.value; renderResults(); };
+  search.oninput = () => {
+    query = search.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(load, 250);
+  };
 
   const wrap = el('<div class="stack"></div>');
   wrap.append(tabs, controls, results);
@@ -143,13 +148,17 @@ export async function newView() {
       ? 'Set a token price (0 = free). Claimants pay you when you accept.'
       : 'People can send you tokens from your post.';
 
+    // Toggling offer/need rebuilds the form — carry the user's text across.
+    const prev = formBox.querySelector('form');
+    const keep = (n) => (prev && prev.elements[n] ? prev.elements[n].value : '');
+
     const fields = [
       {
-        name: 'title', label: 'Title', required: true,
+        name: 'title', label: 'Title', required: true, value: keep('title'),
         placeholder: kind === 'offer' ? 'Homemade sourdough loaf' : 'Need a ride to the food bank',
       },
       {
-        name: 'description', label: 'Description', type: 'textarea', rows: 5,
+        name: 'description', label: 'Description', type: 'textarea', rows: 5, value: keep('description'),
         placeholder: 'Pickup details, contact, coupon / redemption terms…',
       },
     ];
@@ -257,7 +266,7 @@ export async function detailView(id) {
 function buildEditForm(id, detail) {
   const fields = [
     { name: 'title', label: 'Title', required: true, value: detail.title },
-    { name: 'description', label: 'Description', type: 'textarea', rows: 5, value: detail.description || '' },
+    { name: 'description', label: 'Description', type: 'textarea', rows: 5, value: detail.description || '', allowClear: true },
   ];
   if (detail.kind === 'offer') {
     fields.push({ name: 'price_tokens', label: 'Price 🪙 (0 = free)', type: 'number', required: true, min: 0, value: detail.price_tokens });
@@ -317,9 +326,8 @@ function pendingClaimRow(claim) {
       await refreshMe();
       refresh();
     } catch (e) {
-      accept.disabled = false;
-      if (e && e.detail === 'insufficient_balance') toast("Claimant doesn't have enough tokens yet");
-      else toastErr(e);
+      if (e && e.detail === 'insufficient_balance') { accept.disabled = false; toast("Claimant doesn't have enough tokens yet"); }
+      else { toastErr(e); if (e && e.status === 409) refresh(); else accept.disabled = false; }
     }
   };
 
@@ -330,7 +338,7 @@ function pendingClaimRow(claim) {
       await api(`/claims/${claim.id}/decline`, { method: 'POST' });
       toast('Claim declined');
       refresh();
-    } catch (e) { decline.disabled = false; toastErr(e); }
+    } catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else decline.disabled = false; }
   };
 
   row.append(accept, decline);
@@ -347,7 +355,7 @@ function offerViewerCard(id, detail) {
     cancel.onclick = async () => {
       cancel.disabled = true;
       try { await api(`/claims/${mc.id}/cancel`, { method: 'POST' }); toast('Claim canceled'); refresh(); }
-      catch (e) { cancel.disabled = false; toastErr(e); }
+      catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else cancel.disabled = false; }
     };
     card.append(cancel);
     return card;
@@ -367,7 +375,7 @@ function offerViewerCard(id, detail) {
     claim.onclick = async () => {
       claim.disabled = true;
       try { await api(`/catalog/${id}/claim`, { method: 'POST' }); toast('Claim sent'); refresh(); }
-      catch (e) { claim.disabled = false; toastErr(e); }
+      catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else claim.disabled = false; }
     };
     card.append(claim);
   } else {

@@ -38,9 +38,14 @@ async function expectNoGenericError(page) {
   ).toHaveCount(0);
 }
 
-// The visible inline form error (addForm's .field-error), if any.
+// The first visible form error — field-attributed (.field-msg) or general (.field-error).
 function formError(page) {
-  return page.locator('form .field-error:visible');
+  return page.locator('form .field-error:visible, form .field-msg:visible').first();
+}
+
+// The error shown under one SPECIFIC field (the attribution the UI must get right).
+function fieldError(page, name) {
+  return page.locator(`input[name=${name}] ~ .field-msg:visible, textarea[name=${name}] ~ .field-msg:visible`);
 }
 
 async function registerUI(page, username, password = 'password123', displayName) {
@@ -66,5 +71,5 @@ async function logoutUI(page) {
 }
 
 module.exports = {
-  shot, expectNoGenericError, formError, registerUI, loginUI, logoutUI, uname, slug,
+  shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI, uname, slug,
 };

@@ -113,7 +113,11 @@ export async function newView() {
       { name: 'title', label: 'Title', required: true },
       { name: 'description', label: 'Description', type: 'textarea', placeholder: 'What are you doing, and what should volunteers bring?' },
       { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet' },
-      { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true },
+      { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true,
+        // A finger-slip on the date wheels (wrong year / AM-PM) would create a
+        // project that never shows under "Upcoming" — flag it before submit.
+        validate: (v) => (new Date(v).getTime() < Date.now() - 12 * 3600e3
+          ? 'This start time is in the past — double-check the date.' : null) },
       { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: 120, placeholder: '120' },
       { name: 'waiver_text', label: 'Waiver', type: 'textarea', rows: 6, placeholder: 'Leave blank to use the standard template.' },
     ],
@@ -230,7 +234,7 @@ function openEdit(id, p) {
     submit: 'Save changes',
     fields: [
       { name: 'title', label: 'Title', required: true, value: p.title },
-      { name: 'description', label: 'Description', type: 'textarea', value: p.description || '' },
+      { name: 'description', label: 'Description', type: 'textarea', value: p.description || '', allowClear: true },
       { name: 'location_text', label: 'Location', required: true, value: p.location_text },
       { name: 'starts_at', label: 'Starts at', type: 'datetime-local', value: toLocalInput(p.starts_at) },
       { name: 'expected_minutes', label: 'Expected minutes', type: 'number', min: 1, step: 1, value: p.expected_minutes },
@@ -341,15 +345,18 @@ export async function leadView(id) {
   const alForm = el('<form class="row" style="gap:.4rem"></form>');
   const alInput = el('<input class="grow" name="username" placeholder="Add leader by username" autocomplete="off">');
   alForm.append(alInput, el('<button class="act" type="submit">Add</button>'));
+  const alBtn = alForm.querySelector('button');
   alForm.onsubmit = async (e) => {
     e.preventDefault();
-    const u = alInput.value.trim();
-    if (!u) return;
+    // Handles display as "@name" everywhere — accept a pasted "@name" too.
+    const u = alInput.value.replace(/^@/, '').trim().toLowerCase();
+    if (!u || alBtn.disabled) return;
+    alBtn.disabled = true; // no double-submit race ("added" then "already a leader")
     try {
       await api(`/projects/${id}/leaders`, { body: { username: u } });
       toast('Leader added');
       refresh();
-    } catch (ex) { toastErr(ex); }
+    } catch (ex) { toastErr(ex); } finally { alBtn.disabled = false; }
   };
   leadWrap.append(alForm);
   root.append(leadWrap);

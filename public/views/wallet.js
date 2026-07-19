@@ -50,7 +50,12 @@ function myClaimRow(c) {
         await api(`/claims/${c.id}/cancel`, { method: 'POST' });
         toast('Request canceled');
         refresh();
-      } catch (ex) { cancel.disabled = false; toastErr(ex); }
+      } catch (ex) {
+        toastErr(ex);
+        // A 409 means the claim changed under us — re-render reality, don't
+        // leave a dead button that repeats the same error forever.
+        if (ex && ex.status === 409) refresh(); else cancel.disabled = false;
+      }
     };
     actions.append(cancel);
   }
@@ -85,7 +90,12 @@ function incomingRow(c) {
       toast('Accepted 🎁');
       await refreshMe();
       refresh();
-    } catch (ex) { busy(false); toastErr(ex); }
+    } catch (ex) {
+      // "Not enough tokens" here would read as the POSTER's balance — clarify.
+      if (ex && ex.detail === 'insufficient_balance') toast("The claimant doesn't have enough tokens yet.");
+      else toastErr(ex);
+      if (ex && ex.status === 409 && ex.detail !== 'insufficient_balance') refresh(); else busy(false);
+    }
   };
   decline.onclick = async () => {
     busy(true);
@@ -93,7 +103,10 @@ function incomingRow(c) {
       await api(`/claims/${c.id}/decline`, { method: 'POST' });
       toast('Declined');
       refresh();
-    } catch (ex) { busy(false); toastErr(ex); }
+    } catch (ex) {
+      toastErr(ex);
+      if (ex && ex.status === 409) refresh(); else busy(false);
+    }
   };
   bar.append(accept, decline);
   row.append(bar);
@@ -132,17 +145,16 @@ export async function walletView() {
     title: 'Send tokens',
     submit: 'Send 🪙',
     fields: [
-      { name: 'to_username', label: 'To (username)', required: true, placeholder: 'their username' },
+      { name: 'to_username', label: 'To (username)', required: true, placeholder: 'their username',
+        // Handles display as "@name" everywhere — accept a pasted "@name" too.
+        transform: (v) => v.replace(/^@/, '').trim().toLowerCase() },
       { name: 'amount', label: 'Amount', type: 'number', required: true, min: 1, step: 1, placeholder: '1' },
       { name: 'note', label: 'Note (optional)', placeholder: 'thanks for the help!' },
     ],
     onSubmit: async (body) => {
-      try {
-        await api('/tokens/tip', { body });
-      } catch (e) {
-        toastErr(e); // cannot_tip_self / insufficient_balance / user_not_found
-        return;
-      }
+      // Errors propagate to addForm, which attributes them to the exact field
+      // (unknown user -> To, insufficient balance -> Amount).
+      await api('/tokens/tip', { body });
       toast(`Sent ${body.amount} 🪙`);
       await refreshMe();
       refresh();

@@ -102,6 +102,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 textarea { min-height: 5rem; resize: vertical; }
 form.add { border: 1px dashed var(--line); border-radius: var(--radius); padding: 1rem; background: var(--card); }
 .field-error { color: var(--red); font-size: .85rem; }
+.field-msg { color: var(--red); font-size: .85rem; margin-top: .25rem; }
+input.invalid, textarea.invalid { border-color: var(--red); outline-color: color-mix(in srgb, var(--red) 40%, transparent); }
 
 /* ---- avatar (initials) ---- */
 .avatar { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; }

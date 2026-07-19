@@ -1,7 +1,8 @@
 // Minimal service worker: makes Active Impact installable and shell-cached so it
-// opens offline. API calls are network-first (fall back to nothing offline).
-// !! Bump SHELL on ANY change to a file in public/ (else clients keep the old shell).
-const SHELL = 'impact-shell-v6';
+// opens offline. Shell assets are NETWORK-FIRST (fresh code always wins when
+// online; cache only serves offline), so clients can never get stuck on a stale
+// bundle. API calls bypass caching entirely.
+const SHELL = 'impact-shell-v8';
 const ASSETS = [
   '/', '/index.html', '/style.css', '/app.js', '/api.js', '/ui.js',
   '/views/auth.js', '/views/projects.js', '/views/checkin.js',
@@ -23,5 +24,15 @@ self.addEventListener('fetch', (e) => {
   const { request } = e;
   if (request.method !== 'GET') return;
   if (new URL(request.url).pathname.startsWith('/api')) return; // API: always network
-  e.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
+  // Network-first: serve fresh code whenever online, refresh the cache as we go,
+  // and fall back to the cached shell only when the network fails (offline).
+  e.respondWith(
+    fetch(request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(SHELL).then((c) => c.put(request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(request)),
+  );
 });
