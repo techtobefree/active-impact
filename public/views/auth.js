@@ -18,34 +18,34 @@ function renderAuth(isLogin) {
     intro.append(el(`<p class="banner info">✅ Your check-in code was scanned — ${isLogin ? 'sign in' : 'create an account'} and we’ll take you straight to the waiver.</p>`));
   }
 
-  // Live guards for the exact traps real users hit: an email (often re-inserted
-  // by the browser's autofill) or phone auto-capitalization in the handle field.
-  const usernameField = {
-    name: 'username', label: 'Username', required: true,
-    placeholder: 'e.g. jordan_kay',
-    hint: 'Your public handle — letters, numbers, _ or - (not an email).',
-    attrs: { autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false' },
+  // Live guards for the traps real users hit: stray spaces (often re-inserted
+  // by the browser's autofill) or phone auto-capitalization in the email field.
+  const emailField = {
+    name: 'email', label: 'Email', required: true,
+    placeholder: 'you@example.com',
+    attrs: { autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', inputmode: 'email' },
     transform: (v) => v.toLowerCase().replace(/\s+/g, ''),
     validate: (v) => {
-      if (/^[a-z0-9_-]{3,30}$/.test(v)) return null;
-      if (v.includes('@')) return 'This is your public handle, not an email — try something like jordan_kay.';
-      if (v.length < 3) return 'At least 3 characters.';
-      if (v.length > 30) return 'At most 30 characters.';
-      return 'Only letters, numbers, _ and - (no spaces or symbols).';
+      if (v.length > 254) return 'At most 254 characters.';
+      if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return null;
+      return "That doesn't look like an email address — e.g. jordan@example.com.";
     },
   };
   const fields = isLogin
     ? [
-        // Keep the email guard at login too: an autofilled email would otherwise
-        // dead-end as "wrong username or password" while the user retries passwords.
-        { ...usernameField, placeholder: '', hint: undefined,
-          validate: (v) => (v.includes('@')
-            ? 'You signed up with a handle, not an email — e.g. jordan_kay.' : null) },
+        { ...emailField, placeholder: '' },
         { name: 'password', label: 'Password', type: 'password', required: true },
       ]
     : [
-        usernameField,
-        { name: 'display_name', label: 'Display name (optional)', placeholder: 'Shown to others, e.g. Jordan Kay' },
+        emailField,
+        { name: 'display_name', label: 'Display name', required: true, placeholder: 'e.g. Jordan Kay',
+          hint: 'Your public identity — shown to others instead of your email.',
+          validate: (v) => {
+            const chars = [...v.trim()].length;
+            if (chars < 1) return 'Display name is required.';
+            if (chars > 60) return 'At most 60 characters.';
+            return null;
+          } },
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'at least 8 characters',
           validate: (v) => {
             const chars = [...v].length; // code points — what the server counts
@@ -66,7 +66,7 @@ function renderAuth(isLogin) {
       location.hash = popReturn();
     },
   });
-  form.querySelector('[name=username]')?.setAttribute('autocomplete', 'username');
+  form.querySelector('[name=email]')?.setAttribute('autocomplete', 'email');
   form.querySelector('[name=password]')?.setAttribute('autocomplete', isLogin ? 'current-password' : 'new-password');
 
   const switcher = el(`<p class="center muted">${isLogin ? 'New here? ' : 'Have an account? '}<a href="#/${isLogin ? 'register' : 'login'}">${isLogin ? 'Create an account' : 'Sign in'}</a></p>`);

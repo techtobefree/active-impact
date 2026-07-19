@@ -33,7 +33,7 @@ arise.
 
 | # | Capability | What it includes |
 |---|-----------|------------------|
-| 1 | **Social foundation** | Register/login (username+password), profiles, public stats |
+| 1 | **Social foundation** | Register/login (email+password), profiles (display name is the public identity), public stats |
 | 2 | **Impact projects** | Browse/post projects (time, place, expected duration, images), QR check-in with waiver agreement, check-out, time recording, token minting |
 | 3 | **Catalog** | Post needs/offers for goods & services, token prices (incl. coupon-style offers), claim/accept settlement, tipping |
 
@@ -72,7 +72,7 @@ re-litigate them during implementation.**
 |---|----------|-----------|
 | D1 | **Backend = FastAPI + uvicorn, sync handlers.** Schema via **SQLAlchemy models** (`app/models.py`); queries via psycopg 3. | Intent names FastAPI. SQLAlchemy models are the schema source of truth and give versioned migrations that update easily over time; runtime queries use psycopg for directness (the ORM is available for queries too). Pydantic gives free request validation. Sync is simpler than async at MVP scale. |
 | D2 | **Schema = SQLAlchemy models + Alembic migrations.** `app/models.py` is the source of truth; `alembic upgrade head` (run by `python -m app.db --init`) applies pending migrations on **every container boot**. Evolve with `alembic revision --autogenerate -m "..."` → review → upgrade. | A real migration framework so the schema updates easily over time. Autogenerate reliably diffs columns/tables; hand-check partial/expression indexes + CHECK constraints (normal Alembic practice). |
-| D3 | **Auth = username+password with bcrypt**; login mints an opaque token (`secrets.token_hex(32)`) stored in a `sessions` row with **30-day expiry**; client sends `Authorization: Bearer <token>`; token kept in `localStorage`. No cookies, no JWT, no CSRF surface. | home-keep's session-token mechanics (proven, instantly revocable) + real hashing home-keep lacked (its plaintext auth is a non-option for public users). |
+| D3 | **Auth = email+password with bcrypt** (founder decision, supersedes the original username scheme); login mints an opaque token (`secrets.token_hex(32)`) stored in a `sessions` row with **30-day expiry**; client sends `Authorization: Bearer <token>`; token kept in `localStorage`. No cookies, no JWT, no CSRF surface. **Emails are private** — never in any public shape; the public identity is `display_name` (required, non-unique — known MVP tradeoff) + user id. | Email is what people actually have; session-token mechanics unchanged (proven, instantly revocable). Privacy: showing emails on profiles/rosters/ledgers would leak them, so display name carries public identity. |
 | D4 (Q6) | **Frontend = no-build vanilla JS** ES modules + a ~30-line **hash router**; emoji icon system; CSS custom-property tokens incl. a `prefers-color-scheme: dark` override. No framework, no bundler, zero frontend deps. | Matches the deployed reference and the user's essentialism. The router is the one addition home-keep's pattern strictly needs (QR deep links). |
 | D5 (Q1) | **QR = a plain URL.** Server renders SVG QR of `https://SITE/#/c/{checkin_code}`; the **leader displays it**, the **volunteer scans with the native camera app** — no in-app scanner, no getUserMedia. | Zero camera-permission code. A QR that is just a link works on every phone. |
 | D6 (Q2) | **Check-out = explicit action**: volunteer self-checkout, or a leader checks out any participant from the roster, or the leader **closes the project** (checks out everyone still in). No cron, no auto-timeout. **Late checkouts cannot inflate the supply:** credited time is capped at 2× the project's expected duration (see D7) — a leader closing days late mints hours-scale, not days-scale, tokens. | Three cheap paths cover reality; forgetting is handled by the leader closing the project — and the cap makes "handled late" economically safe. Known simplification, documented. |
@@ -98,9 +98,9 @@ re-litigate them during implementation.**
 | `TOKENS_PER_HOUR` | `1` | `app/tokens.py` — half-up capped math per DOMAIN.md § Checkout math |
 | Mint cap | credited minutes ≤ `2 × expected_minutes` | `app/tokens.py` (D6/D7) |
 | Session TTL | 30 days | `app/auth.py` |
-| Username | `^[a-z0-9_-]{3,30}$` (stored lowercase, unique) | Pydantic + DB unique index |
+| Email | `^[^@\s]+@[^@\s]+\.[^@\s]+$`, ≤254, stored lowercase, unique | Pydantic + DB unique index on `lower(email)` |
 | Password | 8–72 chars (bcrypt 72-byte truncation) | Pydantic |
-| Display name | 1–60 chars | Pydantic |
+| Display name | required at registration, 1–60 chars — the public identity | Pydantic |
 | Title fields | 1–120 chars | Pydantic |
 | Description/bio/waiver/note | ≤ 10 000 chars | Pydantic |
 | Image | ≤ 10 MB decoded; `image/jpeg`, `image/png`, `image/webp`; client resize ≤1600px | API + DB CHECK (no separate body-size knob exists — this check is the bound; request-size hardening is deferred with rate limiting) |

@@ -193,7 +193,7 @@ def test_delete_by_entity_leader_not_uploader(register):
     proj = _project(ca)
     # Owner uploads; then promotes b to co-leader.
     image_id = _upload(ca, "project", proj["id"]).json()["id"]
-    r = ca.post(f"/api/projects/{proj['id']}/leaders", json={"username": "coleader_n"})
+    r = ca.post(f"/api/projects/{proj['id']}/leaders", json={"email": "coleader_n@test.local"})
     assert r.status_code == 201, r.text
 
     r = cb.delete(f"/api/images/{image_id}")

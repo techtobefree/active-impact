@@ -11,9 +11,13 @@ function slug(s) {
   return String(s).replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 }
 
-// A unique, valid (^[a-z0-9_-]{3,30}$) username per run.
+// A unique slug per run (for display names / email local parts).
 function uname(tag = '') {
   return ('e2e' + Date.now().toString(36) + (seq++) + tag).toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
+}
+// A unique, valid email per run.
+function uemail(tag = '') {
+  return uname(tag) + '@e2e.local';
 }
 
 // Screenshot a step -> screenshots/<test>/NN-label.png, and attach to the HTML report.
@@ -48,18 +52,18 @@ function fieldError(page, name) {
   return page.locator(`input[name=${name}] ~ .field-msg:visible, textarea[name=${name}] ~ .field-msg:visible`);
 }
 
-async function registerUI(page, username, password = 'password123', displayName) {
+async function registerUI(page, email, password = 'password123', displayName = 'E2E User') {
   await page.goto('/#/register');
-  await page.locator('input[name=username]').fill(username);
-  if (displayName) await page.locator('input[name=display_name]').fill(displayName);
+  await page.locator('input[name=email]').fill(email);
+  await page.locator('input[name=display_name]').fill(displayName); // required — public identity
   await page.locator('input[name=password]').fill(password);
   await page.getByRole('button', { name: /create account/i }).click();
   await expect(page.locator('#nav')).toBeVisible(); // signed in -> chrome appears
 }
 
-async function loginUI(page, username, password = 'password123') {
+async function loginUI(page, email, password = 'password123') {
   await page.goto('/#/login');
-  await page.locator('input[name=username]').fill(username);
+  await page.locator('input[name=email]').fill(email);
   await page.locator('input[name=password]').fill(password);
   await page.getByRole('button', { name: /^sign in$/i }).click();
 }
@@ -71,5 +75,5 @@ async function logoutUI(page) {
 }
 
 module.exports = {
-  shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI, uname, slug,
+  shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI, uname, uemail, slug,
 };

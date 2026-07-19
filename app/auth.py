@@ -1,6 +1,6 @@
 """Auth: register / login / logout and the current_user dependency.
 
-Real username+password with bcrypt; login mints an opaque 30-day bearer token
+Real email+password with bcrypt; login mints an opaque 30-day bearer token
 stored in the sessions table (instant revocation, nothing signed). See
 docs/design/API.md § Auth and OVERVIEW.md D3.
 """
@@ -20,8 +20,19 @@ from app.serializers import me_shape
 
 router = APIRouter()
 
-USERNAME_RE = re.compile(r"^[a-z0-9_-]{3,30}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_MAX = 254
 SESSION_TTL = "30 days"
+
+
+def normalize_email(v: str) -> str:
+    """Lowercase + trim, then validate shape and length. Raises ValueError."""
+    v = v.strip().lower()
+    if len(v) > EMAIL_MAX:
+        raise ValueError(f"email must be at most {EMAIL_MAX} characters")
+    if not EMAIL_RE.match(v):
+        raise ValueError("invalid email address")
+    return v
 
 
 def _hash_password(password: str) -> str:
@@ -50,17 +61,14 @@ def _bearer(authorization: str | None) -> str | None:
 
 
 class RegisterIn(BaseModel):
-    username: str
+    email: str
     password: str
-    display_name: str | None = None
+    display_name: str
 
-    @field_validator("username")
+    @field_validator("email")
     @classmethod
-    def _norm_username(cls, v: str) -> str:
-        v = v.strip().lower()
-        if not USERNAME_RE.match(v):
-            raise ValueError("username must be 3-30 chars of a-z, 0-9, _ or -")
-        return v
+    def _norm_email(cls, v: str) -> str:
+        return normalize_email(v)
 
     @field_validator("password")
     @classmethod
@@ -71,17 +79,15 @@ class RegisterIn(BaseModel):
 
     @field_validator("display_name")
     @classmethod
-    def _norm_display(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
+    def _norm_display(cls, v: str) -> str:
         v = v.strip()
-        if len(v) > 60:
-            raise ValueError("display name too long")
-        return v or None
+        if not (1 <= len(v) <= 60):
+            raise ValueError("display name must be 1-60 characters")
+        return v
 
 
 class LoginIn(BaseModel):
-    username: str
+    email: str
     password: str
 
 
@@ -102,24 +108,23 @@ def current_user(authorization: str | None = Header(default=None)) -> dict:
 
 @router.post("/auth/register", status_code=201)
 def register(body: RegisterIn):
-    display = body.display_name or body.username
     try:
         with db.tx() as c:
             user = c.execute(
-                "INSERT INTO users(username, password_hash, display_name) "
+                "INSERT INTO users(email, password_hash, display_name) "
                 "VALUES (%s, %s, %s) RETURNING *",
-                (body.username, _hash_password(body.password), display),
+                (body.email, _hash_password(body.password), body.display_name),
             ).fetchone()
             token = _new_session(c, user["id"])
     except psycopg.errors.UniqueViolation:
-        raise api_error(409, "username_taken")
+        raise api_error(409, "email_taken")
     return {"token": token, "user": me_shape(user)}
 
 
 @router.post("/auth/login")
 def login(body: LoginIn):
-    username = body.username.strip().lower()
-    user = db.query_one("SELECT * FROM users WHERE lower(username) = %s", (username,))
+    email = body.email.strip().lower()
+    user = db.query_one("SELECT * FROM users WHERE lower(email) = %s", (email,))
     if not user or not _check_password(body.password, user["password_hash"]):
         raise api_error(401, "invalid_credentials")
     with db.tx() as c:

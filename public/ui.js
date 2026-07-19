@@ -30,11 +30,11 @@ export function fmtDuration(mins) {
   return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
 }
 
-// ---- avatar (deterministic color from username) ----
+// ---- avatar (deterministic color from user id) ----
 const AV_COLORS = ['#2e7d5b', '#b8860b', '#3b6ea5', '#8e5aa8', '#b4452f', '#2a8a8a', '#a1662f'];
 export function avatarEl(user, big = false) {
-  const name = (user && (user.display_name || user.username)) || '?';
-  const key = (user && user.username) || name;
+  const name = (user && user.display_name) || '?';
+  const key = (user && user.id != null) ? String(user.id) : name;
   let h = 0; for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const color = AV_COLORS[h % AV_COLORS.length];
   const initials = name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0]).join('').toUpperCase();
@@ -60,13 +60,13 @@ export function spinner() { return el('<div class="spinner">Loading…</div>'); 
 const ERRORS = {
   offline: "You're offline — check your connection.",
   unauthorized: 'Your session expired — sign in again.',
-  username_taken: 'That username is taken.',
-  invalid_credentials: 'Wrong username or password.',
+  email_taken: 'An account with this email already exists — sign in instead.',
+  invalid_credentials: 'Wrong email or password.',
   auth_required: 'Please sign in.',
   invalid_token: 'Your session expired — sign in again.',
   insufficient_balance: 'Not enough tokens.',
   cannot_tip_self: "You can't send tokens to yourself.",
-  user_not_found: 'No user by that name.',
+  user_not_found: 'No account with that email.',
   not_found: 'Not found.',
   invalid_code: 'That check-in code is invalid or the project has ended.',
   already_checked_in: "You're already checked in here.",
@@ -121,9 +121,9 @@ export function toastErr(e) { toast(errMessage(e)); }
 
 // Which known server error codes belong to which form field.
 const FIELD_FOR_CODE = {
-  username_taken: 'username',
-  user_not_found: 'to_username',
-  cannot_tip_self: 'to_username',
+  email_taken: 'email',
+  user_not_found: 'to_email',
+  cannot_tip_self: 'to_email',
   insufficient_balance: 'amount',
   price_required: 'price_tokens',
   price_on_need: 'price_tokens',

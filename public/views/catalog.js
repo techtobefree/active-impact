@@ -30,7 +30,7 @@ function quantityTag(item) {
 function posterLine(item) {
   const p = item.poster;
   if (!p) return null;
-  return el(`<p class="small muted">by <a href="#/u/${esc(p.username)}">${esc(p.display_name || p.username)}</a></p>`);
+  return el(`<p class="small muted">by <a href="#/u/${esc(p.id)}">${esc(p.display_name)}</a></p>`);
 }
 
 // A list card: cover, linked title, status pill, price/need + quantity, poster.
@@ -313,7 +313,7 @@ function pendingClaimRow(claim) {
   const row = el('<div class="card row wrap"></div>');
   const c = claim.claimant || {};
   const info = el('<div class="grow"></div>');
-  info.append(el(`<div><a href="#/u/${esc(c.username)}">${esc(c.display_name || c.username)}</a></div>`));
+  info.append(el(`<div><a href="#/u/${esc(c.id)}">${esc(c.display_name)}</a></div>`));
   info.append(el(`<div class="small muted">${esc('wants this for ' + (claim.price_tokens === 0 ? 'free' : claim.price_tokens + ' 🪙'))}</div>`));
   row.append(info);
 
@@ -396,7 +396,7 @@ function needTipCard(id, detail) {
     ],
     submit: 'Send tokens',
     onSubmit: async (body) => {
-      body.to_username = detail.poster.username;
+      body.to_user_id = detail.poster.id;
       body.catalog_item_id = Number(id);
       await api('/tokens/tip', { body });
       toast('Tokens sent!');

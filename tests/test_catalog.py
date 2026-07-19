@@ -426,12 +426,12 @@ def test_list_claims_by_role(register):
     assert len(mine) == 1
     assert mine[0]["id"] == claim["id"]
     assert mine[0]["item"]["id"] == item["id"]
-    assert mine[0]["item"]["poster"]["username"] == "rl_poster"   # counterparty
+    assert mine[0]["item"]["poster"] == {"id": p["id"], "display_name": "rl_poster"}  # counterparty
 
     # Poster sees it as a request on their item, with the claimant.
     theirs = cp.get("/api/claims?role=poster").json()
     assert len(theirs) == 1
-    assert theirs[0]["claimant"]["username"] == "rl_claimant"     # counterparty
+    assert theirs[0]["claimant"] == {"id": c["id"], "display_name": "rl_claimant"}    # counterparty
 
     # Poster has no claims as a claimant.
     assert cp.get("/api/claims").json() == []

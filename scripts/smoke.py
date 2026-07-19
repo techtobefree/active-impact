@@ -6,8 +6,8 @@ Stdlib only -- runs anywhere Python 3 exists, including inside the app container
     docker compose -f docker-compose.prod.yml exec app python scripts/smoke.py http://localhost:8000
 
 Walks the real happy paths and asserts each step. Creates throwaway users
-(smoke-<epoch>-a/b) -- harmless on a fresh instance. Exits non-zero on any
-failure and prints where it broke. Prints "SMOKE PASS" on success.
+(smoke-<epoch>-a/b@smoke.local) -- harmless on a fresh instance. Exits non-zero
+on any failure and prints where it broke. Prints "SMOKE PASS" on success.
 """
 import json
 import sys
@@ -17,8 +17,8 @@ import urllib.request
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000").rstrip("/")
 STAMP = int(time.time())
-A = f"smoke-{STAMP}-a"
-B = f"smoke-{STAMP}-b"
+A = f"smoke-{STAMP}-a@smoke.local"
+B = f"smoke-{STAMP}-b@smoke.local"
 PW = "smoke-password-123"
 
 
@@ -58,14 +58,20 @@ print(f"Active Impact smoke test against {BASE}")
 s, j = call("GET", "/api/health")
 check(s == 200 and j.get("ok") and j.get("db"), "health ok + db", (s, j))
 
-# 2. register a & b; login a
-s, j = call("POST", "/api/auth/register", body={"username": A, "password": PW})
+# 2. register a & b; duplicate email rejected; login a
+s, j = call("POST", "/api/auth/register",
+            body={"email": A, "password": PW, "display_name": "Smoke A"})
 check(s == 201 and j.get("token"), "register A", (s, j))
+check(j.get("user", {}).get("email") == A, "register echoes own email", j)
 tok_a = j["token"]
-s, j = call("POST", "/api/auth/register", body={"username": B, "password": PW})
+s, j = call("POST", "/api/auth/register",
+            body={"email": B, "password": PW, "display_name": "Smoke B"})
 check(s == 201, "register B", s)
 tok_b = j["token"]
-s, j = call("POST", "/api/auth/login", body={"username": A, "password": PW})
+s, j = call("POST", "/api/auth/register",
+            body={"email": A.upper(), "password": PW, "display_name": "Imposter"})
+check(s == 409 and j.get("detail") == "email_taken", "duplicate email 409 email_taken", (s, j))
+s, j = call("POST", "/api/auth/login", body={"email": A, "password": PW})
 check(s == 200 and j.get("token"), "login A", (s, j))
 tok_a = j["token"]
 
@@ -101,8 +107,8 @@ part_id = parts[0]["id"]
 s, j = call("POST", f"/api/participations/{part_id}/checkout", token=tok_a)
 check(s == 200 and j.get("tokens_awarded") == 0, "checkout b -> 0 tokens (near-zero time)", (s, j))
 
-# 6. b has no tokens -> tip fails with the ledger guard
-s, j = call("POST", "/api/tokens/tip", token=tok_b, body={"to_username": A, "amount": 1})
+# 6. b has no tokens -> tip (by email) fails with the ledger guard
+s, j = call("POST", "/api/tokens/tip", token=tok_b, body={"to_email": A, "amount": 1})
 check(s == 409 and j.get("detail") == "insufficient_balance", "tip with empty wallet 409", (s, j))
 
 # 7. a posts a free offer; b claims; a accepts

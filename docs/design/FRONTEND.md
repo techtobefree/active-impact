@@ -63,17 +63,17 @@ waiver screen.* Test this path explicitly.
 
 | Route | Content & API calls |
 |---|---|
-| `#/login`, `#/register` | Forms with `autocomplete` attrs (password managers). On success: store `ai_token`/`ai_user` in localStorage → return-to. Link between the two; register shows username rules inline |
+| `#/login`, `#/register` | **Email + password** (register also requires Display name — the public identity). `autocomplete`/`inputmode=email` attrs; live field-attributed validation. On success: store `ai_token`/`ai_user` in localStorage → return-to. Link between the two |
 | `#/` **Projects** | Upcoming project cards (`GET /projects`): title, 📍 location, 🗓 local time, ⏱ expected duration, cover image, checked-in count. Client + `q` search. "＋ New project". Tabs: Upcoming · Past · Mine |
 | `#/projects/new` | `addForm`: title, description, location, starts_at (`<input type="datetime-local">` → ISO), expected duration (hours picker → minutes), waiver textarea **left blank → server seeds the default template** (placeholder text says so; template lives server-side only — no client copy to drift) + banner: *"Blank uses our standard template — not legal advice. Edit to fit your project."* |
 | `#/projects/:id` | Detail: images strip, description, leaders (→ profiles), waiver (collapsed `<details>`), my state — checked-in banner with live elapsed time + **Check out** button when open participation exists. `am_leader` → **Lead screen** link + edit. `POST /participations/:id/checkout` on checkout, then show "🎉 +N tokens" |
-| `#/projects/:id/lead` | Leader hub: **big QR** (`<img src=blob>` of `/qr.svg` — authed fetch), the `checkin_code` as text fallback (from project detail, `am_leader` only), regenerate button (confirm), **"Check in yourself"** link → `#/c/{code}` (leaders earn too — intent), roster with per-row **Check out** (posts the row's participation `id`), live count, **Close project** (confirm: "checks out everyone & completes"), add/remove leader by username (owner irremovable), image upload |
+| `#/projects/:id/lead` | Leader hub: **big QR** (`<img src=blob>` of `/qr.svg` — authed fetch), the `checkin_code` as text fallback (from project detail, `am_leader` only), regenerate button (confirm), **"Check in yourself"** link → `#/c/{code}` (leaders earn too — intent), roster with per-row **Check out** (posts the row's participation `id`), live count, **Close project** (confirm: "checks out everyone & completes"), add leader by email / remove by ✕ (owner irremovable; responses show display names only), image upload |
 | `#/c/:code` **Check-in landing** | The heart. `GET /checkin/:code` → project summary + **full waiver text** + `[ I agree — check me in ]`. Agree → `POST /agree` → success state: "✅ You're checked in — HH:MM. Find the leader if you need anything." Already checked in → banner + Check out. Invalid → friendly error + link home |
 | `#/catalog` | Tabs **Offers · Needs** (`?kind=`), cards: title, poster, 🪙 price (offers) / "need" badge, image. "＋ Post" |
 | `#/catalog/new` | Kind toggle first — *offer*: price 🪙 (0 = free) + optional quantity; *need*: no price, helper text "people can send you tokens from your post". Description placeholder mentions pickup/contact/coupon terms |
 | `#/catalog/:id` | Detail + role-aware actions. Viewer on offer: **Claim (N 🪙)** / claim status chip (pending→Cancel; accepted→"show this screen as proof"). Viewer on need: **Send tokens** (tip form, `catalog_item_id` attached). Poster: edit/close, **image upload via `imagesStrip` (poster only** — the food example needs a photo**)**, pending claims list with **Accept / Decline** (accept errors surface `insufficient_balance` as "claimant doesn't have enough tokens yet") |
-| `#/wallet` | Balance hero (🪙 big number), **Send tokens** (username, amount, note), ledger list (`direction` arrows, counterparty, note, kind chip, local time), claims section: *mine* + *on my items* with pending-action rows |
-| `#/u/:username` | Public profile: initials avatar (deterministic bg from username hash), display name, bio, joined; stats row: ⏱ hours · 🪙 earned · 📋 projects. **Send tokens** button |
+| `#/wallet` | Balance hero (🪙 big number), **Send tokens** (recipient **email**, amount, note), ledger list (`direction` arrows, counterparty display name, note, kind chip, local time), claims section: *mine* + *on my items* with pending-action rows |
+| `#/u/:id` | Public profile: initials avatar (deterministic bg), display name, bio, joined; stats row: ⏱ hours · 🪙 earned · 📋 projects. **Send tokens** button (tips by `to_user_id`) |
 | `#/me` | Own profile + edit (display_name, bio) + logout. Install-app button lives here too |
 
 Empty states are one-line muted guidance (home-keep pattern): *"No projects yet.
@@ -94,7 +94,7 @@ home-keep's helper, renamed keys (`ai_token`, `ai_user`) with the return-to hook
 
 All user-originated strings pass through `esc()` (HTML-entity escaper in `ui.js`)
 inside template literals, or are assigned via `textContent`. The reference app
-skipped this (trusted insiders); Active Impact is public — a username must never
+skipped this (trusted insiders); Active Impact is public — a display name must never
 execute. Add one regression test-page check to manual verification: register as
 `<img src=x onerror=alert(1)>`-style display name, confirm it renders inert.
 

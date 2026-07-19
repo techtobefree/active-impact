@@ -17,7 +17,7 @@ function ledgerRow(e) {
   const inbound = e.direction === 'in';
   const cp = e.counterparty;
   const who = cp
-    ? `<a href="#/u/${esc(cp.username)}">${esc(cp.display_name || cp.username)}</a>`
+    ? `<a href="#/u/${esc(cp.id)}">${esc(cp.display_name)}</a>`
     : '<span class="muted">system</span>';
   const note = e.note ? `<div class="muted small">${esc(e.note)}</div>` : '';
   const amtColor = inbound ? 'var(--green)' : 'var(--red)';
@@ -67,7 +67,7 @@ function incomingRow(c) {
   const item = c.item || {};
   const claimant = c.claimant;
   const who = claimant
-    ? `<a href="#/u/${esc(claimant.username)}">${esc(claimant.display_name || claimant.username)}</a>`
+    ? `<a href="#/u/${esc(claimant.id)}">${esc(claimant.display_name)}</a>`
     : '<span class="muted">someone</span>';
   const row = el(`<div class="card stack">
     <div class="row" style="align-items:flex-start">
@@ -145,9 +145,9 @@ export async function walletView() {
     title: 'Send tokens',
     submit: 'Send 🪙',
     fields: [
-      { name: 'to_username', label: 'To (username)', required: true, placeholder: 'their username',
-        // Handles display as "@name" everywhere — accept a pasted "@name" too.
-        transform: (v) => v.replace(/^@/, '').trim().toLowerCase() },
+      { name: 'to_email', label: 'To (email)', required: true, placeholder: 'their email',
+        attrs: { autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', inputmode: 'email' },
+        transform: (v) => v.toLowerCase().replace(/\s+/g, '') },
       { name: 'amount', label: 'Amount', type: 'number', required: true, min: 1, step: 1, placeholder: '1' },
       { name: 'note', label: 'Note (optional)', placeholder: 'thanks for the help!' },
     ],

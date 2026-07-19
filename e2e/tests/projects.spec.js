@@ -1,9 +1,9 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, uname } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, uname, uemail } = require('../helpers');
 
 test.describe('Projects', () => {
   test('create a project, show the QR, self check-in via the waiver, and check out', async ({ page }, testInfo) => {
-    await registerUI(page, uname('proj'), 'password123', 'Project Host');
+    await registerUI(page, uemail('proj'), 'password123', 'Project Host');
     await shot(page, testInfo, 'home');
 
     // Create a project (expected_minutes defaults to 120).
@@ -42,7 +42,7 @@ test.describe('Projects', () => {
   });
 
   test('a newly created project appears under "Mine"', async ({ page }, testInfo) => {
-    await registerUI(page, uname('mine'));
+    await registerUI(page, uemail('mine'), 'password123', 'Mine Tester');
     await page.getByRole('link', { name: /new project/i }).click();
     await page.locator('input[name=title]').fill('My Mine Project');
     await page.locator('input[name=location_text]').fill('Somewhere');

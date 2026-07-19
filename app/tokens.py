@@ -9,7 +9,7 @@ See docs/design/DOMAIN.md § Token accounting.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app import db, serializers
 from app.auth import current_user
@@ -117,15 +117,18 @@ def entry_out(entry: dict, me_id: int) -> dict:
 
 
 class TipIn(BaseModel):
-    to_username: str
+    """Recipient is EITHER a user id (profile/need-page buttons) OR an email
+    (the wallet free-form field) -- exactly one. Responses never echo the email."""
+    to_user_id: int | None = None
+    to_email: str | None = None
     amount: int = Field(ge=1)
     note: str | None = None
     catalog_item_id: int | None = None
 
-    @field_validator("to_username")
+    @field_validator("to_email")
     @classmethod
-    def _norm(cls, v: str) -> str:
-        return v.strip().lower()
+    def _norm(cls, v: str | None) -> str | None:
+        return v.strip().lower() if v is not None else None
 
     @field_validator("note")
     @classmethod
@@ -133,6 +136,12 @@ class TipIn(BaseModel):
         if v is not None and len(v) > 10000:
             raise ValueError("note too long")
         return v
+
+    @model_validator(mode="after")
+    def _exactly_one_recipient(self):
+        if (self.to_user_id is None) == (self.to_email is None):
+            raise ValueError("exactly one of to_user_id or to_email is required")
+        return self
 
 
 @router.get("/tokens/ledger")
@@ -147,7 +156,10 @@ def ledger(page: Page = Depends(pagination), user: dict = Depends(current_user))
 
 @router.post("/tokens/tip", status_code=201)
 def tip(body: TipIn, user: dict = Depends(current_user)):
-    to = db.query_one("SELECT id FROM users WHERE lower(username) = %s", (body.to_username,))
+    if body.to_user_id is not None:
+        to = db.query_one("SELECT id FROM users WHERE id = %s", (body.to_user_id,))
+    else:
+        to = db.query_one("SELECT id FROM users WHERE lower(email) = %s", (body.to_email,))
     if not to:
         raise api_error(404, "user_not_found")
     if to["id"] == user["id"]:

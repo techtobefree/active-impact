@@ -64,11 +64,17 @@ def api():
 
 @pytest.fixture
 def register(api):
-    """Return a factory: register(username) -> (authed_client, user, token)."""
-    def _register(username="alice", password="password123", display_name=None):
-        body = {"username": username, "password": password}
-        if display_name:
-            body["display_name"] = display_name
+    """Return a factory: register(name) -> (authed_client, user, token).
+
+    Builds email f"{name}@test.local" and defaults display_name to the name,
+    so call sites keep passing short handles.
+    """
+    def _register(name="alice", password="password123", display_name=None):
+        body = {
+            "email": f"{name}@test.local",
+            "password": password,
+            "display_name": display_name or name,
+        }
         r = api.post("/api/auth/register", json=body)
         r.raise_for_status()
         data = r.json()

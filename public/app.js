@@ -24,7 +24,7 @@ const routes = [
   [/^#\/catalog\/(\d+)$/, catalog.detailView],
   [/^#\/wallet$/, wallet.walletView],
   [/^#\/me$/, profile.meView],
-  [/^#\/u\/([\w-]+)$/, profile.userView],
+  [/^#\/u\/(\d+)$/, profile.userView],
 ];
 
 export function updateBalance(me) {

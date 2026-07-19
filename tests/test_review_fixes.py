@@ -82,7 +82,7 @@ def test_tip_bad_catalog_item_id_is_404_not_500(register):
     with db.tx() as c:
         tokens.mint(c, a["id"], 5)
     r = ca.post("/api/tokens/tip",
-                json={"to_username": "revtipb", "amount": 1, "catalog_item_id": 999999})
+                json={"to_email": "revtipb@test.local", "amount": 1, "catalog_item_id": 999999})
     assert r.status_code == 404
     assert _balance(a["id"]) == 5 and _balance(b["id"]) == 0   # nothing moved
 

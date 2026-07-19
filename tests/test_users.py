@@ -14,7 +14,7 @@ def test_me_roundtrip(register):
     assert r.status_code == 200
     me = r.json()
     assert me["id"] == user["id"]
-    assert me["username"] == "alice"
+    assert me["email"] == "alice@test.local"   # own email visible only to self
     assert me["display_name"] == "Alice A"
     assert me["bio"] == ""
     assert me["balance"] == 0
@@ -60,12 +60,12 @@ def test_patch_empty_body_is_noop(register):
 
 
 def test_public_profile_shape_and_stats(register):
-    _client_a, _ua, _ = register("erin", display_name="Erin E")
+    _client_a, ua, _ = register("erin", display_name="Erin E")
     viewer, _uv, _ = register("viewer")
-    r = viewer.get("/api/users/ERIN")   # lowercased lookup
+    r = viewer.get(f"/api/users/{ua['id']}")   # lookup by integer id
     assert r.status_code == 200
     prof = r.json()
-    assert prof["username"] == "erin"
+    assert prof["id"] == ua["id"]
     assert prof["display_name"] == "Erin E"
     assert prof["bio"] == ""
     assert "created_at" in prof
@@ -74,13 +74,15 @@ def test_public_profile_shape_and_stats(register):
     assert prof["tokens_earned"] == 0
     assert prof["projects_joined"] == 0
     # Private fields must NOT appear on a public profile.
+    assert "email" not in prof
+    assert "username" not in prof
     assert "balance" not in prof
     assert "password_hash" not in prof
 
 
 def test_unknown_user_404(register):
     client, _user, _token = register("frank")
-    r = client.get("/api/users/nobody")
+    r = client.get("/api/users/999999")
     assert r.status_code == 404
     assert r.json()["detail"] == "not_found"
 
@@ -103,5 +105,5 @@ def test_auth_required(api, register):
     assert api.get("/api/me").status_code == 401
     assert api.patch("/api/me", json={"bio": "hi"}).status_code == 401
     # Public-profile endpoint is behind the auth wall too (D12).
-    register("harry")
-    assert api.get("/api/users/harry").status_code == 401
+    _c, hu, _ = register("harry")
+    assert api.get(f"/api/users/{hu['id']}").status_code == 401

@@ -24,8 +24,8 @@
 
 | Endpoint | Body → Response | Errors |
 |---|---|---|
-| `POST /api/auth/register` | `{username, password, display_name?}` → **201** `{token, user}` (auto-login; `display_name` defaults to username; username lowercased) | 409 `username_taken`; 422 pattern/length |
-| `POST /api/auth/login` | `{username, password}` → `{token, user}` (also deletes this user's expired sessions — D19) | 401 `invalid_credentials` (same code whether user exists or not) |
+| `POST /api/auth/register` | `{email, password, display_name}` → **201** `{token, user}` (auto-login; email lowercased/trimmed; `display_name` **required** — the public identity) | 409 `email_taken`; 422 pattern/length |
+| `POST /api/auth/login` | `{email, password}` → `{token, user}` (also deletes this user's expired sessions — D19) | 401 `invalid_credentials` (same code whether the account exists or not) |
 | `POST /api/auth/logout` | — → **204** (deletes the presented session row) | — |
 
 `user` here = `/api/me` shape below. bcrypt via the `bcrypt` package;
@@ -37,9 +37,9 @@ and injects it into every protected handler.
 
 | Endpoint | → Response | Errors |
 |---|---|---|
-| `GET /api/me` | `{id, username, display_name, bio, balance, created_at}` | — |
+| `GET /api/me` | `{id, email, display_name, bio, balance, created_at}` (email appears **only** here) | — |
 | `PATCH /api/me` | body `{display_name?, bio?}` → updated me (bumps `updated_at`) | 422 |
-| `GET /api/users/{username}` | **user_public** (includes stats; NO balance) | 404 |
+| `GET /api/users/{user_id}` | **user_public** (includes stats; NO balance, NO email) | 404 |
 
 ## Projects — `app/projects.py`
 
@@ -47,14 +47,14 @@ and injects it into every protected handler.
 |---|---|---|
 | `GET /api/projects` 📄 | `?scope=upcoming` (default: `status='open' AND starts_at >= now()-'12 hours'`, ASC) · `past` (the rest, DESC) · `mine` (**participations ∪ leaderships** — a poster who never checked in still finds their project here). `&q=` ILIKE on title/description/location. Returns **project_card[]** | — |
 | `POST /api/projects` | `{title, description?, location_text, starts_at, expected_minutes, waiver_text?}` → **201** project detail. In one tx: insert project (fresh `checkin_code`), owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` template — placeholder marked *not legal advice*) | 422 |
-| `GET /api/projects/{id}` | Detail: card fields + `description`, `image_ids[]`, `leaders[] {id, username, display_name}`, `waiver {id, version, text}` (current), `am_leader`, `checkin_code` (**present only when `am_leader`** — feeds the lead screen's text fallback and smoke.py), `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` | 404 |
+| `GET /api/projects/{id}` | Detail: card fields + `description`, `image_ids[]`, `leaders[] {id, display_name}`, `waiver {id, version, text}` (current), `am_leader`, `checkin_code` (**present only when `am_leader`** — feeds the lead screen's text fallback and smoke.py), `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` | 404 |
 | `PATCH /api/projects/{id}` | Leader only. `{title?, description?, location_text?, starts_at?, expected_minutes?, waiver_text?}` — a **changed** `waiver_text` INSERTs waiver v(n+1) (I5) | 403 `not_a_leader`; 409 `project_not_open` |
 | `POST /api/projects/{id}/close` | Leader. `open → completed`; checks out ALL open participations, minting (capped math) in the same tx. Also how a project that never happened is ended — zero-minute participations mint 0 | 403; 409 `project_not_open` |
-| `POST /api/projects/{id}/leaders` | Leader. `{username}` → **201** leaders list | 403; 404 `user_not_found`; 409 `already_leader` |
-| `DELETE /api/projects/{id}/leaders/{username}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
+| `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (the response shows display names, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
+| `DELETE /api/projects/{id}/leaders/{user_id}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
 | `POST /api/projects/{id}/code/regenerate` | Leader. New `checkin_code` (old QR instantly dead) → `{checkin_code}` | 403 |
 | `GET /api/projects/{id}/qr.svg` | Leader. `image/svg+xml` QR of `{scheme}://{host}/#/c/{checkin_code}` — **origin = `request.url.scheme` + Host**. Behind Caddy the scheme is https because the Dockerfile CMD runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` (trusting X-Forwarded-Proto; safe — only Caddy can reach the app). On the dev LAN it is honestly `http://<ip>:8000`, so M2's phone-scan verify works | 403 |
-| `GET /api/projects/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, username, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403 |
+| `GET /api/projects/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403 |
 
 ## Check-in — `app/checkin.py`
 
@@ -71,8 +71,8 @@ The QR encodes a URL, so the volunteer's **native camera** opens the PWA at
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/tokens/ledger` 📄 | Entries where I'm `from` or `to`, newest-first, with counterparty `{username, display_name}` resolved, `direction: in\|out` | — |
-| `POST /api/tokens/tip` | `{to_username, amount, note?, catalog_item_id?}` → **201** entry. `transfer(kind='tip')` — covers tipping AND donating to a need (pass the item id for context) | 404 `user_not_found`; 409 `insufficient_balance`; 409 `cannot_tip_self`; 422 amount < 1 |
+| `GET /api/tokens/ledger` 📄 | Entries where I'm `from` or `to`, newest-first, with counterparty `{id, display_name}` resolved, `direction: in\|out` | — |
+| `POST /api/tokens/tip` | `{to_user_id \| to_email (exactly one), amount, note?, catalog_item_id?}` → **201** entry. UI buttons (profile/need pages) use `to_user_id`; the wallet's free-form send uses `to_email`. Responses never echo an email. `transfer(kind='tip')` — covers tipping AND donating to a need | 404 `user_not_found`; 409 `insufficient_balance`; 409 `cannot_tip_self`; 422 amount < 1 or not-exactly-one recipient |
 
 ## Catalog — `app/catalog.py`
 

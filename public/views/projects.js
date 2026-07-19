@@ -209,7 +209,7 @@ export async function detailView(id) {
     for (const lead of p.leaders) {
       const row = el('<div class="row"></div>');
       row.append(avatarEl(lead));
-      row.append(el(`<a class="grow" href="#/u/${esc(lead.username)}">${esc(lead.display_name || lead.username)}</a>`));
+      row.append(el(`<a class="grow" href="#/u/${esc(lead.id)}">${esc(lead.display_name)}</a>`));
       wrap.append(row);
     }
     root.append(wrap);
@@ -327,13 +327,13 @@ export async function leadView(id) {
   for (const lead of p.leaders || []) {
     const row = el('<div class="row"></div>');
     row.append(avatarEl(lead));
-    row.append(el(`<a class="grow" href="#/u/${esc(lead.username)}">${esc(lead.display_name || lead.username)}</a>`));
+    row.append(el(`<a class="grow" href="#/u/${esc(lead.id)}">${esc(lead.display_name)}</a>`));
     if (!(p.owner && lead.id === p.owner.id)) {
       const x = el('<button class="act del" title="Remove leader">✕</button>');
       x.onclick = async () => {
-        if (!confirm(`Remove ${lead.display_name || lead.username} as a leader?`)) return;
+        if (!confirm(`Remove ${lead.display_name} as a leader?`)) return;
         try {
-          await api(`/projects/${id}/leaders/${encodeURIComponent(lead.username)}`, { method: 'DELETE' });
+          await api(`/projects/${id}/leaders/${encodeURIComponent(lead.id)}`, { method: 'DELETE' });
           toast('Leader removed');
           refresh();
         } catch (e) { toastErr(e); }
@@ -343,17 +343,16 @@ export async function leadView(id) {
     leadWrap.append(row);
   }
   const alForm = el('<form class="row" style="gap:.4rem"></form>');
-  const alInput = el('<input class="grow" name="username" placeholder="Add leader by username" autocomplete="off">');
+  const alInput = el('<input class="grow" name="email" placeholder="Add leader by email" autocomplete="off" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false">');
   alForm.append(alInput, el('<button class="act" type="submit">Add</button>'));
   const alBtn = alForm.querySelector('button');
   alForm.onsubmit = async (e) => {
     e.preventDefault();
-    // Handles display as "@name" everywhere — accept a pasted "@name" too.
-    const u = alInput.value.replace(/^@/, '').trim().toLowerCase();
-    if (!u || alBtn.disabled) return;
+    const em = alInput.value.trim().toLowerCase();
+    if (!em || alBtn.disabled) return;
     alBtn.disabled = true; // no double-submit race ("added" then "already a leader")
     try {
-      await api(`/projects/${id}/leaders`, { body: { username: u } });
+      await api(`/projects/${id}/leaders`, { body: { email: em } });
       toast('Leader added');
       refresh();
     } catch (ex) { toastErr(ex); } finally { alBtn.disabled = false; }
@@ -389,7 +388,7 @@ function rosterRow(id, r) {
   const row = el('<div class="card row" style="align-items:flex-start"></div>');
   row.append(avatarEl(r.user));
   const mid = el('<div class="grow"></div>');
-  mid.append(el(`<a href="#/u/${esc(r.user.username)}">${esc(r.user.display_name || r.user.username)}</a>`));
+  mid.append(el(`<a href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
   mid.append(el(`<div class="muted small">In ${esc(fmtDateTime(r.checked_in_at))}</div>`));
   if (r.checked_out_at) {
     mid.append(el(`<div class="muted small">Out ${esc(fmtDateTime(r.checked_out_at))} · ${esc(fmtDuration(r.minutes))} · ＋${esc(r.tokens_awarded)} 🪙</div>`));

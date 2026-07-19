@@ -49,16 +49,16 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    username: Mapped[str] = mapped_column(Text, nullable=False)  # ^[a-z0-9_-]{3,30}$, lowercased
+    email: Mapped[str] = mapped_column(Text, nullable=False)  # lowercased, private -- never in public shapes
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)  # bcrypt
-    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)  # public identity (1-60 chars, non-unique)
     bio: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     balance: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")  # cached ledger sum
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("balance >= 0", name="balance_nonneg"),
-        Index("idx_users_username", text("lower(username)"), unique=True),
+        Index("idx_users_email", text("lower(email)"), unique=True),
     )
 
 

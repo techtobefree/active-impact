@@ -9,20 +9,21 @@ from app import db
 
 
 def user_brief(uid: int | None) -> dict | None:
+    """Public identity: id + display name only. Emails are private -- never here."""
     if uid is None:
         return None
     return db.query_one(
-        "SELECT id, username, display_name FROM users WHERE id=%s", (uid,)
+        "SELECT id, display_name FROM users WHERE id=%s", (uid,)
     )
 
 
 def me_shape(row: dict) -> dict:
-    """Private self view -- includes balance."""
-    return {k: row[k] for k in ("id", "username", "display_name", "bio", "balance", "created_at")}
+    """Private self view -- the ONLY shape that carries the email (and balance)."""
+    return {k: row[k] for k in ("id", "email", "display_name", "bio", "balance", "created_at")}
 
 
 def user_public(row: dict) -> dict:
-    """Public profile + volunteer stats. Balance is intentionally omitted."""
+    """Public profile + volunteer stats. Email and balance are intentionally omitted."""
     uid = row["id"]
     minutes = db.query_one(
         "SELECT COALESCE(SUM(minutes),0) AS m FROM participations "
@@ -41,7 +42,6 @@ def user_public(row: dict) -> dict:
     )["c"]
     return {
         "id": uid,
-        "username": row["username"],
         "display_name": row["display_name"],
         "bio": row["bio"],
         "created_at": row["created_at"],

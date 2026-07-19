@@ -66,7 +66,7 @@ the cross-table FKs need no special handling.
 
 CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
-  username      TEXT NOT NULL,                 -- ^[a-z0-9_-]{3,30}$, stored lowercase
+  email         TEXT NOT NULL,                 -- login credential; PRIVATE (never in public shapes); lowercased
   password_hash TEXT NOT NULL,                 -- bcrypt
   display_name  TEXT NOT NULL,
   bio           TEXT NOT NULL DEFAULT '',
@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(lower(username));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(lower(email));
+-- (Historically this column was `username`; Alembic migration 0002 renamed it.)
 
 -- Bearer-token sessions. Expired rows are deleted opportunistically on login.
 CREATE TABLE IF NOT EXISTS sessions (
@@ -296,12 +297,12 @@ volunteers (flat rate is intent).
 
 ## Standard read shapes (used by API.md)
 
-- **user_public**: `id, username, display_name, bio, created_at` + stats
+- **user_public**: `id, display_name, bio, created_at` + stats (never the email)
   (`hours_volunteered` = Σ minutes/60 rounded to 1 decimal, `tokens_earned` =
   Σ `earn` entries, `projects_joined` = count distinct closed participations'
   projects). Balance is **private** (only in `/api/me`).
 - **project_card**: `id, title, location_text, starts_at, expected_minutes,
   status, cover_image_id (first image or null), checked_in_count, owner {id,
-  username, display_name}`.
+  display_name}`.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
-  cover_image_id, poster {id, username, display_name}, created_at`.
+  cover_image_id, poster {id, display_name}, created_at`.

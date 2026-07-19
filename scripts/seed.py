@@ -28,15 +28,15 @@ from app import db, tokens
 from app.auth import _hash_password
 
 
-def user(username, display):
-    row = db.query_one("SELECT * FROM users WHERE username=%s", (username,))
+def user(email, display):
+    row = db.query_one("SELECT * FROM users WHERE email=%s", (email,))
     if row:
         return row
     with db.tx() as c:
         return c.execute(
-            "INSERT INTO users(username, password_hash, display_name, bio) "
+            "INSERT INTO users(email, password_hash, display_name, bio) "
             "VALUES (%s, %s, %s, %s) RETURNING *",
-            (username, _hash_password("password123"), display,
+            (email, _hash_password("password123"), display,
              f"Demo account for {display}."),
         ).fetchone()
 
@@ -96,9 +96,9 @@ def need(poster, title):
 
 def main():
     db.init()
-    ana = user("ana", "Ana Ortiz")
-    ben = user("ben", "Ben Carter")
-    mia = user("mia", "Mia Chen")
+    ana = user("ana@example.com", "Ana Ortiz")
+    ben = user("ben@example.com", "Ben Carter")
+    mia = user("mia@example.com", "Mia Chen")
 
     park = project(ana, "Riverside Park Cleanup", "Riverside Park, Main St", 180, hours_ago_start=24)
     food = project(ben, "Community Food Drive", "St. Mark's Hall", 240, hours_ago_start=48)
@@ -113,10 +113,11 @@ def main():
     offer(ben, "50% off yoga class coupon", 1, quantity=5)
     need(mia, "Rides to the food bank on Saturdays")
 
-    print("Seeded demo data. Users: ana / ben / mia  (password: password123)")
+    print("Seeded demo data. Users: ana@example.com / ben@example.com / "
+          "mia@example.com  (password: password123)")
     for u in (ana, ben, mia):
         bal = db.query_one("SELECT balance FROM users WHERE id=%s", (u["id"],))["balance"]
-        print(f"  {u['username']}: {bal} tokens")
+        print(f"  {u['email']}: {bal} tokens")
 
 
 if __name__ == "__main__":

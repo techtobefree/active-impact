@@ -1,8 +1,9 @@
 """Users: /me and public profiles + stats.
 
-GET /api/me returns the private self view (includes balance); PATCH /api/me
-edits display_name/bio and bumps updated_at; GET /api/users/{username} returns
-the public profile with volunteer stats (no balance). See API.md § Users.
+GET /api/me returns the private self view (includes email + balance); PATCH
+/api/me edits display_name/bio and bumps updated_at; GET /api/users/{user_id}
+returns the public profile with volunteer stats (no email, no balance).
+See API.md § Users.
 """
 from __future__ import annotations
 
@@ -67,12 +68,10 @@ def update_me(body: MeUpdate, user: dict = Depends(current_user)):
     return me_shape(row)
 
 
-@router.get("/users/{username}")
-def get_user(username: str, _user: dict = Depends(current_user)):
-    """Public profile + stats for a user (lowercased lookup)."""
-    row = db.query_one(
-        "SELECT * FROM users WHERE lower(username) = %s", (username.strip().lower(),)
-    )
+@router.get("/users/{user_id}")
+def get_user(user_id: int, _user: dict = Depends(current_user)):
+    """Public profile + stats for a user, by integer id."""
+    row = db.query_one("SELECT * FROM users WHERE id = %s", (user_id,))
     if not row:
         raise api_error(404, "not_found")
     return user_public(row)

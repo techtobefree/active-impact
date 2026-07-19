@@ -1,4 +1,4 @@
-// Profile views: public profile (#/u/:username) + my profile/edit (#/me).
+// Profile views: public profile (#/u/:id) + my profile/edit (#/me).
 import { api, currentUser, getToken, setSession, clearSession } from '../api.js';
 import {
   el, esc, mount, addForm, avatarEl, spinner, toast,
@@ -6,28 +6,26 @@ import {
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
 
-// ---- public profile: #/u/:username ----
-export async function userView(username) {
+// ---- public profile: #/u/:id ----
+export async function userView(id) {
   mount(spinner());
   let user;
   try {
-    user = await api('/users/' + encodeURIComponent(username));
+    user = await api('/users/' + encodeURIComponent(id));
   } catch (e) {
     mount(emptyState(errMessage(e)));
     return;
   }
 
   const me = currentUser();
-  const isMe = !!(me && me.username &&
-    me.username.toLowerCase() === String(user.username).toLowerCase());
+  const isMe = !!(me && me.id != null && me.id === user.id);
 
   const card = el('<div class="card stack"></div>');
 
   const head = el('<div class="row"></div>');
   head.append(avatarEl(user, true));
   head.append(el(
-    `<div class="grow"><h1 style="margin:0">${esc(user.display_name || user.username)}</h1>` +
-    `<p class="muted" style="margin:.2rem 0 0">@${esc(user.username)}</p></div>`,
+    `<div class="grow"><h1 style="margin:0">${esc(user.display_name)}</h1></div>`,
   ));
   card.append(head);
 
@@ -51,7 +49,7 @@ function tipSection(user) {
   const btn = el('<button class="act primary block">Send tokens</button>');
   btn.onclick = () => {
     const form = addForm({
-      title: 'Send tokens to @' + user.username,
+      title: 'Send tokens to ' + user.display_name,
       fields: [
         { name: 'amount', label: 'Amount (🪙)', type: 'number', required: true, min: 1, step: 1, placeholder: '1' },
         { name: 'note', label: 'Note (optional)', type: 'textarea', rows: 2 },
@@ -59,9 +57,9 @@ function tipSection(user) {
       submit: 'Send',
       onSubmit: async (body) => {
         await api('/tokens/tip', {
-          body: { to_username: user.username, amount: body.amount, note: body.note },
+          body: { to_user_id: user.id, amount: body.amount, note: body.note },
         });
-        toast('Sent ' + body.amount + ' 🪙 to @' + user.username);
+        toast('Sent ' + body.amount + ' 🪙 to ' + user.display_name);
         await refreshMe();
         form.replaceWith(btn); // collapse back to the button
       },
@@ -83,14 +81,14 @@ export async function meView() {
   const head = el('<div class="row"></div>');
   head.append(avatarEl(me, true));
   head.append(el(
-    `<div class="grow"><h1 style="margin:0">${esc(me.display_name || me.username)}</h1>` +
-    `<p class="muted" style="margin:.2rem 0 0">@${esc(me.username)}</p></div>`,
+    `<div class="grow"><h1 style="margin:0">${esc(me.display_name)}</h1>` +
+    `<p class="muted" style="margin:.2rem 0 0">${esc(me.email)} · only you can see this</p></div>`,
   ));
   summary.append(head);
   summary.append(el(
     `<div class="row"><span class="grow">Balance</span><strong>🪙 ${esc(me.balance)}</strong></div>`,
   ));
-  summary.append(el(`<a class="act ghost block" href="#/u/${esc(me.username)}">View public profile</a>`));
+  summary.append(el(`<a class="act ghost block" href="#/u/${esc(me.id)}">View public profile</a>`));
 
   // Edit form
   const editCard = el('<div class="card"></div>');

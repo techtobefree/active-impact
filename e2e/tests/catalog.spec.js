@@ -1,12 +1,12 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, logoutUI, uname } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, logoutUI, uname, uemail } = require('../helpers');
 
 test.describe('Catalog', () => {
   test('post an offer; a second user finds and claims it', async ({ page }, testInfo) => {
     const title = 'E2E Muffins ' + uname('t');
 
     // Seller posts a free offer.
-    await registerUI(page, uname('sell'), 'password123', 'Seller');
+    await registerUI(page, uemail('sell'), 'password123', 'Seller');
     await page.getByRole('link', { name: /catalog/i }).first().click();
     await page.getByRole('button', { name: /post/i }).click();
     await page.locator('input[name=title]').fill(title);
@@ -20,7 +20,7 @@ test.describe('Catalog', () => {
 
     // Buyer signs up and claims it.
     await logoutUI(page);
-    await registerUI(page, uname('buy'), 'password123', 'Buyer');
+    await registerUI(page, uemail('buy'), 'password123', 'Buyer');
     await page.goto('/#/catalog');
     await expect(page.getByRole('link', { name: title })).toBeVisible();
     await shot(page, testInfo, 'catalog-list-buyer');
@@ -33,7 +33,7 @@ test.describe('Catalog', () => {
   });
 
   test('posting a need shows the tip helper, not a price field', async ({ page }, testInfo) => {
-    await registerUI(page, uname('need'));
+    await registerUI(page, uemail('need'), 'password123', 'Need Poster');
     await page.goto('/#/catalog/new');
     await page.getByRole('button', { name: /need/i }).click();
     await shot(page, testInfo, 'new-need-form');

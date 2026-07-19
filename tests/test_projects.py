@@ -69,14 +69,15 @@ def test_create_seeds_leader_waiver_and_code(register):
     assert detail["expected_minutes"] == 120
     assert detail["status"] == "open"
     assert detail["checked_in_count"] == 0
-    assert detail["owner"]["username"] == "owner"
+    assert detail["owner"] == {"id": user["id"], "display_name": "owner"}
     # detail-only fields
     assert detail["description"] == ""
     assert detail["image_ids"] == []
     assert detail["my_open_participation"] is None
     assert detail["my_hours_here"] == 0.0
-    # owner is seeded as the sole leader
-    assert [l["username"] for l in detail["leaders"]] == ["owner"]
+    # owner is seeded as the sole leader (public identity only, no email)
+    assert [l["display_name"] for l in detail["leaders"]] == ["owner"]
+    assert all("email" not in l and "username" not in l for l in detail["leaders"])
     # waiver v1 defaults to the placeholder template
     assert detail["waiver"]["version"] == 1
     assert detail["waiver"]["text"] == DEFAULT_WAIVER
@@ -216,18 +217,20 @@ def test_patch_completed_project_409(register):
 # ---- leaders ----------------------------------------------------------------
 
 def test_add_and_remove_leader(register):
-    owner, _o, _ = register("owner")
+    owner, ou, _ = register("owner")
     co, cou, _ = register("colead")
     pid = make_project(owner)["id"]
 
-    r = owner.post(f"/api/projects/{pid}/leaders", json={"username": "colead"})
+    # add by email (case-insensitive)
+    r = owner.post(f"/api/projects/{pid}/leaders", json={"email": "Colead@TEST.local"})
     assert r.status_code == 201
-    assert {l["username"] for l in r.json()} == {"owner", "colead"}
+    assert {l["display_name"] for l in r.json()} == {"owner", "colead"}
+    assert all("email" not in l for l in r.json())
     # the new leader now has leader powers
     assert co.patch(f"/api/projects/{pid}", json={"title": "Co edit"}).status_code == 200
 
-    # remove the co-leader
-    r = owner.delete(f"/api/projects/{pid}/leaders/colead")
+    # remove the co-leader by user id
+    r = owner.delete(f"/api/projects/{pid}/leaders/{cou['id']}")
     assert r.status_code == 204
     # they lose leader powers
     assert co.patch(f"/api/projects/{pid}", json={"title": "x"}).status_code == 403
@@ -241,33 +244,33 @@ def test_add_leader_errors(register):
 
     # non-leader cannot add
     assert other.post(f"/api/projects/{pid}/leaders",
-                      json={"username": "colead"}).status_code == 403
+                      json={"email": "colead@test.local"}).status_code == 403
     # unknown user
-    r = owner.post(f"/api/projects/{pid}/leaders", json={"username": "ghost"})
+    r = owner.post(f"/api/projects/{pid}/leaders", json={"email": "ghost@test.local"})
     assert r.status_code == 404 and r.json()["detail"] == "user_not_found"
     # already a leader (the owner)
-    r = owner.post(f"/api/projects/{pid}/leaders", json={"username": "owner"})
+    r = owner.post(f"/api/projects/{pid}/leaders", json={"email": "owner@test.local"})
     assert r.status_code == 409 and r.json()["detail"] == "already_leader"
 
 
 def test_owner_is_irremovable(register):
-    owner, _o, _ = register("owner")
+    owner, ou, _ = register("owner")
     pid = make_project(owner)["id"]
-    r = owner.delete(f"/api/projects/{pid}/leaders/owner")
+    r = owner.delete(f"/api/projects/{pid}/leaders/{ou['id']}")
     assert r.status_code == 409 and r.json()["detail"] == "cannot_remove_owner"
 
 
 def test_remove_leader_errors(register):
-    owner, _o, _ = register("owner")
-    other, _x, _ = register("stranger")
+    owner, ou, _ = register("owner")
+    other, xu, _ = register("stranger")
     pid = make_project(owner)["id"]
     # non-leader cannot remove
-    assert other.delete(f"/api/projects/{pid}/leaders/owner").status_code == 403
-    # unknown username
-    r = owner.delete(f"/api/projects/{pid}/leaders/ghost")
+    assert other.delete(f"/api/projects/{pid}/leaders/{ou['id']}").status_code == 403
+    # unknown user id
+    r = owner.delete(f"/api/projects/{pid}/leaders/999999")
     assert r.status_code == 404 and r.json()["detail"] == "user_not_found"
     # a real user who isn't a leader
-    r = owner.delete(f"/api/projects/{pid}/leaders/stranger")
+    r = owner.delete(f"/api/projects/{pid}/leaders/{xu['id']}")
     assert r.status_code == 404 and r.json()["detail"] == "not_found"
 
 
@@ -412,7 +415,7 @@ def test_roster_leader_only(register):
     assert roster["checked_in_count"] == 1
     assert len(roster["participations"]) == 1
     row = roster["participations"][0]
-    assert row["user"]["username"] == "volunteer"
+    assert row["user"] == {"id": vu["id"], "display_name": "volunteer"}
     assert "id" in row and row["checked_out_at"] is None
 
     # non-leader forbidden

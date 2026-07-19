@@ -107,9 +107,9 @@ class ProjectUpdate(BaseModel):
 
 
 class AddLeaderIn(BaseModel):
-    username: str
+    email: str
 
-    @field_validator("username")
+    @field_validator("email")
     @classmethod
     def _norm(cls, v: str) -> str:
         return v.strip().lower()
@@ -382,7 +382,7 @@ def add_leader(
     if not _is_leader(project_id, user["id"]):
         raise api_error(403, "not_a_leader")
     target = db.query_one(
-        "SELECT id FROM users WHERE lower(username) = %s", (body.username,)
+        "SELECT id FROM users WHERE lower(email) = %s", (body.email,)
     )
     if not target:
         raise api_error(404, "user_not_found")
@@ -397,19 +397,16 @@ def add_leader(
     return _leaders(project_id)
 
 
-@router.delete("/projects/{project_id}/leaders/{username}", status_code=204)
+@router.delete("/projects/{project_id}/leaders/{user_id}", status_code=204)
 def remove_leader(
-    project_id: int, username: str, user: dict = Depends(current_user)
+    project_id: int, user_id: int, user: dict = Depends(current_user)
 ):
     row = _get_project(project_id)
     if not row:
         raise api_error(404, "not_found")
     if not _is_leader(project_id, user["id"]):
         raise api_error(403, "not_a_leader")
-    target = db.query_one(
-        "SELECT id FROM users WHERE lower(username) = %s",
-        (username.strip().lower(),),
-    )
+    target = db.query_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not target:
         raise api_error(404, "user_not_found")
     if target["id"] == row["owner_id"]:
