@@ -29,6 +29,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Stable constraint/index names so Alembic autogenerate produces clean diffs.
@@ -210,6 +211,31 @@ class CatalogClaim(Base):
               unique=True, postgresql_where=text("status = 'pending'")),
         Index("idx_claims_claimant", "claimant_id"),
         Index("idx_claims_item", "item_id"),
+    )
+
+
+class Event(Base):
+    """Append-only audit log — one immutable row per check-in / check-out.
+
+    Written in the SAME tx as the state change it records (via app/events.log),
+    so an event can never exist without its change or vice-versa. Rows are never
+    updated or deleted; they are the source of truth for later reporting.
+    """
+    __tablename__ = "events"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    type: Mapped[str] = mapped_column(Text, nullable=False)  # 'check_in' | 'check_out'
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # who performed it
+    subject_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # the volunteer it is about
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    participation_id: Mapped[int | None] = mapped_column(ForeignKey("participations.id", ondelete="SET NULL"))
+    minutes: Mapped[int | None] = mapped_column(Integer)
+    tokens: Mapped[int | None] = mapped_column(Integer)
+    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        Index("idx_events_type", "type", "created_at"),
+        Index("idx_events_project", "project_id"),
+        Index("idx_events_subject", "subject_user_id"),
     )
 
 

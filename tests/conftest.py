@@ -45,7 +45,7 @@ from app.main import app  # noqa: E402
 
 # Child-first order so RESTART IDENTITY CASCADE is clean.
 _TABLES = [
-    "token_entries", "catalog_claims", "catalog_items", "participations",
+    "events", "token_entries", "catalog_claims", "catalog_items", "participations",
     "waivers", "project_leaders", "projects", "images", "sessions", "users",
 ]
 

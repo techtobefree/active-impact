@@ -71,6 +71,9 @@ The QR encodes a URL, so the volunteer's **native camera** opens the PWA at
 | `POST /api/checkin/{code}/agree` | **The signature.** → **201** participation. One tx: re-validate code, ensure an RSVP row (idempotent — so QR check-ins appear in the organizer's RSVP list), insert participation pinned to the **current** waiver version. Leaders check in through this same endpoint (their lead screen has the code) | 404 `invalid_code`; 409 `already_checked_in` |
 | `POST /api/participations/{id}/checkout` | Self **or** leader of that project. Runs the checkout math from DOMAIN.md (half-up minutes, capped tokens, mint) in one tx → updated participation incl. `minutes`, `tokens_awarded` | 403 `not_allowed`; 409 `already_checked_out`; 404 |
 
+Every check-in and check-out is recorded to the internal append-only **events**
+audit log (`events` table) in the same tx as the change — no public endpoint yet.
+
 ## Tokens — `app/tokens.py`
 
 | Endpoint | Notes | Errors |

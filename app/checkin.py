@@ -19,7 +19,7 @@ from __future__ import annotations
 import psycopg
 from fastapi import APIRouter, Depends
 
-from app import db, serializers
+from app import db, events, serializers
 from app.auth import current_user
 from app.deps import api_error
 from app.tokens import do_checkout
@@ -104,6 +104,10 @@ def agree(code: str, user: dict = Depends(current_user)):
                 "VALUES (%s, %s, %s) RETURNING *",
                 (project["id"], user["id"], waiver["id"]),
             ).fetchone()
+            events.log(
+                c, "check_in", actor_user_id=user["id"], subject_user_id=user["id"],
+                project_id=project["id"], participation_id=row["id"],
+            )
     except psycopg.errors.UniqueViolation:
         raise api_error(409, "already_checked_in")
     return row
@@ -137,6 +141,7 @@ def checkout(participation_id: int, user: dict = Depends(current_user)):
                 "checked_in_at": part["checked_in_at"],
                 "expected_minutes": part["expected_minutes"],
             },
+            actor_user_id=user["id"],
         )
     if row is None:
         raise api_error(409, "already_checked_out")

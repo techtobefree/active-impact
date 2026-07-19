@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app import db, serializers
+from app import db, events, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 
@@ -68,13 +68,17 @@ def transfer(c, from_user_id: int, to_user_id: int, amount: int, kind: str,
     ).fetchone()
 
 
-def do_checkout(c, participation: dict) -> dict | None:
+def do_checkout(c, participation: dict, actor_user_id: int | None = None) -> dict | None:
     """Close an OPEN participation and mint its tokens, in the caller's tx.
 
     ``participation`` must carry: id, user_id, checked_in_at, expected_minutes.
+    ``actor_user_id`` is who performed the checkout (self, or a leader/closer).
     Returns the updated row, or None if it was already checked out by a racing
     request (the guarded UPDATE matched no row). Used by the checkout endpoint
     and by project close.
+
+    On the REAL transition (and only then) appends a 'check_out' event to the
+    audit log in the same tx -- never on the already-checked-out (None) path.
     """
     now = c.execute("SELECT now() AS now").fetchone()["now"]
     seconds = (now - participation["checked_in_at"]).total_seconds()
@@ -93,6 +97,13 @@ def do_checkout(c, participation: dict) -> dict | None:
         return None  # already checked out by a concurrent request
     if tokens > 0:
         mint(c, participation["user_id"], tokens, participation_id=participation["id"])
+    # Audit the real transition ONLY (never on the None path). A 0-minute /
+    # 0-token checkout still logs -- the event records that it happened.
+    events.log(
+        c, "check_out", actor_user_id=actor_user_id, subject_user_id=row["user_id"],
+        project_id=row["project_id"], participation_id=row["id"],
+        minutes=minutes, tokens=tokens,
+    )
     return row
 
 

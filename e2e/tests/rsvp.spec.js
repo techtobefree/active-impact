@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, uemail } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, uemail, uname } = require('../helpers');
 
 // A <input type="datetime-local"> value (viewer-local) offset from now by `days`.
 // Computed (not hard-coded) so "future" stays future whenever the suite runs.
@@ -66,14 +66,15 @@ test.describe('RSVP flow', () => {
 
   test('act on a project straight from the events list', async ({ page }, testInfo) => {
     await registerUI(page, uemail('feed'), 'password123', 'Feed Volunteer');
-    await createProject(page, 'E2E Feed Action', dtLocal(7)); // future → live, never "over"
+    const title = 'E2E Feed Action ' + uname(); // unique so the feed card is unambiguous across runs
+    await createProject(page, title, dtLocal(7)); // future → live, never "over"
 
     // Back to the events list (Upcoming).
     await page.goto('/#/');
     await expect(page).toHaveURL(/#\/$/);
 
     // Find the card and RSVP straight from the feed.
-    const card = page.locator('a.card', { hasText: 'E2E Feed Action' });
+    const card = page.locator('a.card', { hasText: title });
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: /^rsvp$/i }).click();
 

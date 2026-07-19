@@ -17,7 +17,7 @@ import qrcode.image.svg
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
-from app import db, serializers
+from app import db, events, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.tokens import do_checkout
@@ -472,7 +472,7 @@ def close_project(project_id: int, user: dict = Depends(current_user)):
             (project_id,),
         ).fetchall()
         for part in open_parts:
-            do_checkout(c, part)
+            do_checkout(c, part, actor_user_id=user["id"])
 
     return _detail(_get_project(project_id), user["id"])
 
@@ -565,10 +565,14 @@ def self_checkin(project_id: int, user: dict = Depends(current_user)):
                 "ON CONFLICT (project_id, user_id) DO NOTHING",
                 (project_id, user["id"]),
             )
-            c.execute(
+            part = c.execute(
                 "INSERT INTO participations(project_id, user_id, waiver_id) "
-                "VALUES (%s, %s, %s)",
+                "VALUES (%s, %s, %s) RETURNING id",
                 (project_id, user["id"], waiver["id"]),
+            ).fetchone()
+            events.log(
+                c, "check_in", actor_user_id=user["id"], subject_user_id=user["id"],
+                project_id=project_id, participation_id=part["id"],
             )
     except psycopg.errors.UniqueViolation:
         raise api_error(409, "already_checked_in")

@@ -21,6 +21,7 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         │                                             source of minutes → tokens)
         ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
         ├── token_entries              (append-only ledger: earn | tip | spend)
+        ├── events                     (append-only audit log: check_in | check_out)
         └── images                     (BYTEA, polymorphic: project | catalog_item)
 ```
 
@@ -33,6 +34,14 @@ Conceptual rules:
   (via `waiver_id`), and the time sheet (minutes → tokens).
 - The **ledger** (`token_entries`) is append-only; `users.balance` is a cached,
   guarded materialization of it. They must always agree.
+- The **events** log (`events`) is an append-only audit trail: one immutable
+  `check_in` / `check_out` row per event, written in the **same transaction** as
+  the state change it records (so an event never exists without its change, nor a
+  change without its event). Rows are never updated or deleted — they are the
+  source of truth for later reporting.
+- **All multi-statement writes are transactional** via `db.tx()` (one
+  `conn.transaction()`): the state change and its ledger/audit rows commit or roll
+  back together.
 - **Liveness is `status`**, everywhere: projects are `open|completed`, items are
   `active|closed`, claims have their lifecycle. No soft-delete columns exist
   except none at all — images are hard-deleted (nothing references them).
@@ -241,6 +250,25 @@ CREATE TABLE IF NOT EXISTS images (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_images_entity ON images(entity, entity_id);
+
+-- events: append-only audit log. One immutable row per check-in / check-out,
+-- written in the SAME tx as the state change (see app/events.log). Never updated
+-- or deleted -- the source of truth for later reporting.
+CREATE TABLE IF NOT EXISTS events (
+  id               BIGSERIAL PRIMARY KEY,
+  type             TEXT NOT NULL,                          -- 'check_in' | 'check_out'
+  actor_user_id    INTEGER REFERENCES users(id),           -- who performed it (self / leader / closer)
+  subject_user_id  INTEGER REFERENCES users(id),           -- the volunteer it is about
+  project_id       INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  participation_id INTEGER REFERENCES participations(id) ON DELETE SET NULL,
+  minutes          INTEGER,
+  tokens           INTEGER,
+  meta             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, created_at);
+CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
+CREATE INDEX IF NOT EXISTS idx_events_subject ON events(subject_user_id);
 
 -- ---- cross-table FKs (added late so tables exist) ---------------------------
 -- Dollar-quoted DO blocks: needed because ADD CONSTRAINT has no IF NOT EXISTS.
