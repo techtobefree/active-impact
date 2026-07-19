@@ -20,9 +20,11 @@ function renderAuth(isLogin) {
         { name: 'password', label: 'Password', type: 'password', required: true },
       ]
     : [
-        { name: 'username', label: 'Username', required: true, placeholder: '3–30 chars: a–z, 0–9, _ or -' },
-        { name: 'display_name', label: 'Display name (optional)' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'at least 8 characters' },
+        { name: 'username', label: 'Username', required: true, placeholder: 'e.g. jordan_kay',
+          hint: 'Your public handle — letters, numbers, _ or - (not an email).' },
+        { name: 'display_name', label: 'Display name (optional)', placeholder: 'Shown to others, e.g. Jordan Kay' },
+        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'at least 8 characters',
+          hint: '8 to 72 characters.' },
       ];
 
   const form = addForm({

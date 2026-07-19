@@ -132,6 +132,7 @@ export function addForm({ title, fields, submit = 'Save', onSubmit }) {
       if (f.step != null) input.step = f.step;
     }
     wrap.append(input);
+    if (f.hint) wrap.append(el(`<div class="small muted" style="margin-top:.25rem">${esc(f.hint)}</div>`));
     form.append(wrap);
   }
   const err = el('<div class="field-error hidden"></div>');

@@ -6,6 +6,7 @@ always wins and every other path falls through to the static shell.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
@@ -23,6 +24,9 @@ from app.catalog import router as catalog_router
 from app.images import router as images_router
 
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
+
+# Changes on every (re)start; the PWA polls it and reloads open tabs on a new build.
+STARTED_AT = str(int(time.time()))
 
 
 class NoCacheStatic(StaticFiles):
@@ -50,6 +54,12 @@ async def _insufficient_balance(request, exc):
 
 
 api = APIRouter(prefix="/api")
+
+
+@api.get("/version")
+def version():
+    """Build token — the PWA reloads open tabs when this changes (fresh code)."""
+    return {"version": STARTED_AT}
 
 
 @api.get("/health")

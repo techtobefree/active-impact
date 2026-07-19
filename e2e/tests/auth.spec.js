@@ -24,6 +24,15 @@ test.describe('Auth', () => {
     await expect(formError(page)).not.toContainText(/something went wrong/i);
     await expect(formError(page)).toContainText(/username/i);
 
+    // An email as the username (a natural instinct — the exact case a real user
+    // hit) is rejected with the REASON, never the generic error.
+    await page.locator('input[name=username]').fill('someone@example.com');
+    await page.locator('input[name=password]').fill('password123');
+    await page.getByRole('button', { name: /create account/i }).click();
+    await shot(page, testInfo, 'email-username-error');
+    await expect(formError(page)).not.toContainText(/something went wrong/i);
+    await expect(formError(page)).toContainText(/username/i);
+
     // Valid → signed in.
     await page.locator('input[name=username]').fill(uname('ok'));
     await page.locator('input[name=password]').fill('password123');

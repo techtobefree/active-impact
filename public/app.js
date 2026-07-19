@@ -88,10 +88,26 @@ export async function render() {
 // re-run the current route (in-place refresh after a mutation)
 export function refresh() { return render(); }
 
+// Auto-reload an open tab when a new build is deployed, so it never runs stale
+// code. /api/version changes on every server (re)start.
+let BUILD = null;
+async function checkVersion() {
+  try {
+    const r = await fetch('/api/version', { cache: 'no-store' });
+    if (!r.ok) return;
+    const { version } = await r.json();
+    if (BUILD === null) BUILD = version;
+    else if (version !== BUILD) location.reload();
+  } catch { /* offline — ignore */ }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });
+setInterval(checkVersion, 20_000);
+
 window.addEventListener('hashchange', render);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 (async () => {
+  await checkVersion(); // record the build we loaded with
   if (getToken()) await refreshMe();
   if (!location.hash) location.hash = '#/'; else render();
 })();
