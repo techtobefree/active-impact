@@ -10,8 +10,8 @@
 
 - `pytest` + FastAPI `TestClient` (httpx). Real Postgres, no mocks of the DB.
 - `tests/conftest.py`: connect `postgres://postgres:postgres@localhost:5433/postgres`
-  (dev-compose socket) → `CREATE DATABASE impact_test` if missing → apply
-  `db/schema.sql` (ClientCursor) → app under test runs with
+  (dev-compose socket) → `CREATE DATABASE impact_test` if missing → run migrations
+  (`alembic upgrade head`) → app under test runs with
   `DATABASE_URL=…/impact_test`. Autouse fixture truncates all tables
   (`TRUNCATE … RESTART IDENTITY CASCADE`) between tests. Helper fixtures:
   `register(username) → (client_with_token, user)`.
@@ -22,7 +22,7 @@
 ## M0 — Skeleton that already deploys
 
 Scaffold per OVERVIEW § Repository layout: `app/db.py` (pool, `query`, `tx`,
-`--init` with ClientCursor), full `db/schema.sql` from DOMAIN.md, `app/main.py`
+`--init` runs Alembic), `app/models.py` + `alembic/` migrations, `app/main.py`
 (health + StaticFiles(`public/`, html=True) mounted after routers), placeholder
 `public/index.html`, requirements, Dockerfile, both compose files, Caddyfile,
 `.env.example`, deploy.sh, backup.sh, .dockerignore.

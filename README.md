@@ -23,7 +23,7 @@ Fast dev loop (auto-reload), against a Postgres container:
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 docker compose up -d postgres         # just the DB (published on 127.0.0.1:5433)
-python -m app.db --init               # apply schema (idempotent)
+python -m app.db --init               # run DB migrations (alembic upgrade head)
 uvicorn app.main:app --reload         # http://localhost:8000
 python scripts/seed.py                # optional demo data (users ana/ben/mia, pw: password123)
 ```
@@ -56,7 +56,8 @@ Backups: `scripts/backup.sh` (cron-able `pg_dump`).
 
 ```
 app/        FastAPI: db, auth, tokens (ledger), users, projects, checkin, catalog, images
-db/         schema.sql (idempotent, applied on every boot)
+app/models.py  SQLAlchemy models (schema source of truth)
+alembic/    migrations — evolve the schema over time (upgraded on boot)
 public/     the PWA — index.html shell, app.js router, api.js, ui.js, views/*
 tests/      pytest (real Postgres test DB)
 scripts/    smoke.py, seed.py, backup.sh

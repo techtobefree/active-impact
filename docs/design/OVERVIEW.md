@@ -58,8 +58,9 @@ arise.
 - **One origin**: the FastAPI container serves both the JSON API under `/api` and
   the static PWA from `public/` — Caddy is a pure reverse proxy.
 - **Frontend**: no-build vanilla-JS PWA (ES modules, hash router, service worker).
-- **Data**: raw parameterized SQL over one connection pool; one idempotent
-  `schema.sql` applied on every boot. No ORM, no migration framework.
+- **Data**: schema defined by **SQLAlchemy models** (`app/models.py`) and evolved
+  with **Alembic** migrations (`alembic upgrade head` on boot); queries run through
+  a psycopg connection pool.
 
 ## Binding decisions
 
@@ -69,8 +70,8 @@ re-litigate them during implementation.**
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| D1 | **Backend = FastAPI + uvicorn, sync handlers, raw SQL via psycopg 3.** No ORM, no Alembic. | Intent names FastAPI. home-keep proves raw-SQL essentialism works; Pydantic gives free validation home-keep lacked. Sync is simpler than async at MVP scale. |
-| D2 | **Schema = one idempotent `db/schema.sql`** (`CREATE TABLE IF NOT EXISTS` + trailing `ALTER TABLE … ADD COLUMN IF NOT EXISTS` upgrade block), applied on **every container boot** by `python -m app.db --init`. | Copies home-keep's proven no-migration story. ⚠ psycopg3 trap: multi-statement files need `cursor_factory=psycopg.ClientCursor` (server-side binding forbids multiple statements) — see DOMAIN.md. |
+| D1 | **Backend = FastAPI + uvicorn, sync handlers.** Schema via **SQLAlchemy models** (`app/models.py`); queries via psycopg 3. | Intent names FastAPI. SQLAlchemy models are the schema source of truth and give versioned migrations that update easily over time; runtime queries use psycopg for directness (the ORM is available for queries too). Pydantic gives free request validation. Sync is simpler than async at MVP scale. |
+| D2 | **Schema = SQLAlchemy models + Alembic migrations.** `app/models.py` is the source of truth; `alembic upgrade head` (run by `python -m app.db --init`) applies pending migrations on **every container boot**. Evolve with `alembic revision --autogenerate -m "..."` → review → upgrade. | A real migration framework so the schema updates easily over time. Autogenerate reliably diffs columns/tables; hand-check partial/expression indexes + CHECK constraints (normal Alembic practice). |
 | D3 | **Auth = username+password with bcrypt**; login mints an opaque token (`secrets.token_hex(32)`) stored in a `sessions` row with **30-day expiry**; client sends `Authorization: Bearer <token>`; token kept in `localStorage`. No cookies, no JWT, no CSRF surface. | home-keep's session-token mechanics (proven, instantly revocable) + real hashing home-keep lacked (its plaintext auth is a non-option for public users). |
 | D4 (Q6) | **Frontend = no-build vanilla JS** ES modules + a ~30-line **hash router**; emoji icon system; CSS custom-property tokens incl. a `prefers-color-scheme: dark` override. No framework, no bundler, zero frontend deps. | Matches the deployed reference and the user's essentialism. The router is the one addition home-keep's pattern strictly needs (QR deep links). |
 | D5 (Q1) | **QR = a plain URL.** Server renders SVG QR of `https://SITE/#/c/{checkin_code}`; the **leader displays it**, the **volunteer scans with the native camera app** — no in-app scanner, no getUserMedia. | Zero camera-permission code. A QR that is just a link works on every phone. |
@@ -115,7 +116,8 @@ active-impact/
 ├── app/                    # FastAPI backend (each file small and single-purpose)
 │   ├── __init__.py
 │   ├── main.py             # app assembly: routers, StaticFiles(public, html=True), health
-│   ├── db.py               # psycopg pool, query()/tx() helpers, --init schema apply
+│   ├── db.py               # psycopg pool, query()/tx() helpers, --init runs migrations
+│   ├── models.py           # SQLAlchemy models — the schema source of truth
 │   ├── auth.py             # register/login/logout, current_user dependency, bcrypt
 │   ├── users.py            # /me, public profiles + stats
 │   ├── projects.py         # projects, leaders, waivers, QR svg, roster
@@ -123,7 +125,7 @@ active-impact/
 │   ├── tokens.py           # ledger read, tip, mint/transfer primitives (the ONLY writers)
 │   ├── catalog.py          # items, claims, accept/decline/cancel
 │   └── images.py           # base64 upload, authed streaming, delete
-├── db/schema.sql           # the entire schema, idempotent (DOMAIN.md is its spec)
+├── alembic/  alembic.ini   # Alembic migrations (alembic upgrade head applies them on boot)
 ├── public/                 # the PWA — no build step, served by FastAPI StaticFiles
 │   ├── index.html  style.css  sw.js  manifest.webmanifest
 │   ├── icon.svg  icon-192.png  icon-512.png  apple-touch-icon.png
@@ -139,7 +141,7 @@ active-impact/
 ```
 
 `requirements.txt` (runtime): `fastapi`, `uvicorn[standard]`, `psycopg[binary]`,
-`bcrypt`, `qrcode`. Dev: `pytest`, `httpx`. Nothing else.
+`sqlalchemy`, `alembic`, `bcrypt`, `qrcode`. Dev: `pytest`, `httpx`.
 
 ## Deliberately deferred (do NOT build)
 

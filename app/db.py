@@ -22,8 +22,6 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgres://postgres:postgres@localhost:5433/impact"
 )
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
-
 # Lazily-opened pool. Every pooled connection uses dict rows.
 pool = ConnectionPool(
     DATABASE_URL,
@@ -66,17 +64,18 @@ def tx():
 
 
 def init() -> None:
-    """Apply schema.sql. Idempotent -- safe to run on every boot.
+    """Apply pending migrations (alembic upgrade head). Idempotent -- safe on every boot.
 
-    Uses a ClientCursor connection so the multi-statement file (including the
-    dollar-quoted DO blocks) executes in one PQexec call.
+    Alembic reads DATABASE_URL (see alembic/env.py), so this targets whichever DB
+    the app/tests point at. The schema itself is defined by the ORM models in
+    app/models.py and evolved via migrations in alembic/versions/.
     """
-    schema = SCHEMA_PATH.read_text()
-    with psycopg.connect(
-        DATABASE_URL, autocommit=True, cursor_factory=psycopg.ClientCursor
-    ) as conn:
-        conn.execute(schema)
-    print("Active Impact schema applied.")
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    command.upgrade(cfg, "head")
+    print("Active Impact migrations applied (alembic upgrade head).")
 
 
 if __name__ == "__main__":
