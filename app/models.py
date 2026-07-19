@@ -117,6 +117,18 @@ class Rsvp(Base):
     )
 
 
+class Follow(Base):
+    __tablename__ = "follows"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("user_id", "project_id", name="uq_follow"),
+        Index("idx_follows_project", "project_id"),
+    )
+
+
 class Waiver(Base):
     __tablename__ = "waivers"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -99,9 +99,7 @@ function projectCard(p) {
     clear(body);
     const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
     const details = el('<div class="grow" style="min-width:0"></div>');
-    details.append(el(`<div class="row" style="align-items:flex-start">
-      <h3 class="grow">${esc(proj.title)}</h3>${statusPill(proj.status)}
-    </div>`));
+    details.append(el(`<h3 class="grow">${esc(proj.title)}</h3>`));
     details.append(el(`<div class="meta">
       <div class="tag">📍 ${esc(proj.location_text)}</div>
       <div class="tag">🗓 ${esc(fmtDateTime(proj.starts_at))}</div>
@@ -110,6 +108,7 @@ function projectCard(p) {
     </div>`));
     row.append(details);
     const cell = el('<div class="action-cell"></div>');
+    cell.append(el(statusPill(proj.status)));
     cell.append(actionEl(proj, async (id) => {
       await refreshMe();
       const fresh = await api('/projects/' + id);
@@ -237,9 +236,7 @@ export async function detailView(id) {
   const head = el('<section class="card stack"></section>');
   const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
   const left = el('<div class="grow" style="min-width:0"></div>');
-  left.append(el(`<div class="row" style="align-items:flex-start">
-    <h1 class="grow">${esc(p.title)}</h1>${statusPill(p.status)}
-  </div>`));
+  left.append(el(`<h1 class="grow">${esc(p.title)}</h1>`));
   left.append(el(`<div class="meta">
     <div class="tag">📍 ${esc(p.location_text)}</div>
     <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
@@ -251,10 +248,56 @@ export async function detailView(id) {
   }
   top.append(left);
   const actCell = el('<div class="action-cell"></div>');
+  actCell.append(el(statusPill(p.status)));
   actCell.append(actionEl(p, () => { refreshMe(); refresh(); }));
   top.append(actCell);
   head.append(top);
   root.append(head);
+
+  // Share / Follow / Invite — available to every signed-in viewer.
+  const social = el('<div class="row" style="gap:.5rem"></div>');
+  const shareUrl = location.origin + '/#/projects/' + id;
+
+  const shareBtn = el('<button class="act grow">Share</button>');
+  shareBtn.onclick = async () => {
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: p.title, url: shareUrl });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        toast('Link copied');
+      }
+    } catch (e) {
+      if (!(e && e.name === 'AbortError')) toastErr(e);
+    }
+  };
+
+  const followBtn = el('<button class="act grow"></button>');
+  const followers = el('<div class="small muted"></div>');
+  const plural = (n) => `${n} follower${n === 1 ? '' : 's'}`;
+  const paintFollow = () => {
+    followBtn.textContent = p.is_following ? '✓ Following' : 'Follow';
+    followBtn.classList.toggle('primary', !!p.is_following);
+    followers.textContent = plural(p.follower_count || 0);
+  };
+  followBtn.onclick = async () => {
+    followBtn.disabled = true;
+    const method = p.is_following ? 'DELETE' : 'POST';
+    try {
+      const r = await api('/projects/' + id + '/follow', { method });
+      p.is_following = r.is_following;
+      p.follower_count = r.follower_count;
+      paintFollow();
+    } catch (e) { toastErr(e); }
+    finally { followBtn.disabled = false; }
+  };
+  paintFollow();
+
+  const inviteBtn = el('<button class="act grow">Invite</button>');
+  inviteBtn.onclick = () => toast('Invites are coming soon.');
+
+  social.append(shareBtn, followBtn, inviteBtn);
+  root.append(social, followers);
 
   // Leader actions
   if (p.am_leader) {

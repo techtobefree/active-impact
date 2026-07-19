@@ -70,5 +70,7 @@ function renderAuth(isLogin) {
   form.querySelector('[name=password]')?.setAttribute('autocomplete', isLogin ? 'current-password' : 'new-password');
 
   const switcher = el(`<p class="center muted">${isLogin ? 'New here? ' : 'Have an account? '}<a href="#/${isLogin ? 'register' : 'login'}">${isLogin ? 'Create an account' : 'Sign in'}</a></p>`);
-  mount(intro, form, switcher);
+  const root = el('<div class="stack"></div>');
+  root.append(intro, form, switcher);
+  mount(root);
 }

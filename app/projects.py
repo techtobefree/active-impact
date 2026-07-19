@@ -164,6 +164,22 @@ def _is_over(row: dict) -> bool:
     return bool(r["over"])
 
 
+def _is_following(project_id: int, user_id: int) -> bool:
+    return db.query_one(
+        "SELECT 1 FROM follows WHERE project_id = %s AND user_id = %s",
+        (project_id, user_id),
+    ) is not None
+
+
+def _follower_count(project_id: int) -> int:
+    return int(
+        db.query_one(
+            "SELECT COUNT(*) AS c FROM follows WHERE project_id = %s",
+            (project_id,),
+        )["c"]
+    )
+
+
 def _my_rsvp(project_id: int, user_id: int) -> dict | None:
     r = db.query_one(
         "SELECT is_leader FROM rsvps WHERE project_id = %s AND user_id = %s",
@@ -238,6 +254,8 @@ def _detail(row: dict, user_id: int) -> dict:
             "waiver": _current_waiver(pid),
             "am_leader": am_leader,
             "is_over": _is_over(row),
+            "is_following": _is_following(pid, user_id),
+            "follower_count": _follower_count(pid),
             "my_rsvp": _my_rsvp(pid, user_id),
             "my_open_participation": (
                 {"id": my_open["id"], "checked_in_at": my_open["checked_in_at"]}
@@ -273,12 +291,18 @@ def list_projects(
         params += [user["id"], user["id"]]
         order = "starts_at DESC, id DESC"
     elif scope == "past":
+        # Over := completed OR now() past starts_at + expected_minutes. Complement
+        # of upcoming, so an ended event lands here and nowhere else.
         where.append(
-            "NOT (status = 'open' AND starts_at >= now() - interval '12 hours')"
+            "(status = 'completed' "
+            "OR now() > starts_at + make_interval(mins => expected_minutes))"
         )
         order = "starts_at DESC, id DESC"
-    else:  # upcoming (default)
-        where.append("status = 'open' AND starts_at >= now() - interval '12 hours'")
+    else:  # upcoming (default) -- future OR ongoing, never ended
+        where.append(
+            "status = 'open' "
+            "AND now() <= starts_at + make_interval(mins => expected_minutes)"
+        )
         order = "starts_at ASC, id ASC"
 
     if q:
@@ -546,6 +570,41 @@ def rsvp(project_id: int, user: dict = Depends(current_user)):
             (project_id, user["id"]),
         )
     return _detail(_get_project(project_id), user["id"])
+
+
+@router.post("/projects/{project_id}/follow")
+def follow_project(project_id: int, user: dict = Depends(current_user)):
+    """Follow a project. Idempotent (ON CONFLICT DO NOTHING). Returns fresh count."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    with db.tx() as c:
+        c.execute(
+            "INSERT INTO follows(project_id, user_id) VALUES (%s, %s) "
+            "ON CONFLICT (user_id, project_id) DO NOTHING",
+            (project_id, user["id"]),
+        )
+    return {
+        "is_following": True,
+        "follower_count": _follower_count(project_id),
+    }
+
+
+@router.delete("/projects/{project_id}/follow")
+def unfollow_project(project_id: int, user: dict = Depends(current_user)):
+    """Unfollow a project. Idempotent. Returns 200 with the fresh follower count."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    with db.tx() as c:
+        c.execute(
+            "DELETE FROM follows WHERE project_id = %s AND user_id = %s",
+            (project_id, user["id"]),
+        )
+    return {
+        "is_following": False,
+        "follower_count": _follower_count(project_id),
+    }
 
 
 @router.post("/projects/{project_id}/checkin")

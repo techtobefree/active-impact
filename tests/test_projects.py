@@ -316,11 +316,11 @@ def test_list_scopes(register):
     past = make_project(owner, title="Old Park", starts_at=_past())["id"]
     theirs = make_project(other, title="Their Thing", starts_at=_future(days=3))["id"]
 
-    # upcoming (default): only the future, still-open project
+    # upcoming (default): open and not over (future or ongoing)
     ids = [p["id"] for p in owner.get("/api/projects").json()]
     assert up in ids and past not in ids and theirs in ids
 
-    # past: the rest (started > 12h ago)
+    # past: over (ended / completed) -- the complement of upcoming
     ids = [p["id"] for p in owner.get("/api/projects?scope=past").json()]
     assert past in ids and up not in ids
 

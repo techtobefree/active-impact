@@ -121,7 +121,7 @@ button:disabled { opacity: .5; cursor: default; }
 .act.big { padding: .8rem 1rem; font-size: 1.05rem; }
 /* Compact action to the right of project details (detail head + list cards).
    The details column shrinks (.grow/min-width:0); the action stays put. */
-.action-cell { flex: none; display: flex; align-items: center; }
+.action-cell { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: .4rem; }
 .action-cell .act { white-space: nowrap; }
 
 /* ---- forms ---- */

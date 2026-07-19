@@ -124,5 +124,7 @@ export async function meView() {
   };
   actions.append(out);
 
-  mount(summary, editCard, actions);
+  const root = el('<div class="stack"></div>');
+  root.append(summary, editCard, actions);
+  mount(root);
 }

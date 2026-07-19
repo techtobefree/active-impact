@@ -176,7 +176,8 @@ export async function walletView() {
     ? incoming.map(incomingRow)
     : [emptyState('No pending requests on your items.')];
 
-  mount(
+  const root = el('<div class="stack"></div>');
+  root.append(
     hero,
     tipForm,
     label('Ledger'),
@@ -186,4 +187,5 @@ export async function walletView() {
     label('Requests on my items'),
     ...incomingNodes,
   );
+  mount(root);
 }

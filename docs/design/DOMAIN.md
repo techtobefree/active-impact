@@ -16,6 +16,7 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── projects (owner) ──┬── project_leaders   (owner auto-added; leaders manage)
         │                      ├── rsvps             (RSVP intent; is_leader = event-leader
         │                      │                      DESIGNATION, a flag with no powers yet)
+        │                      ├── follows           (interest / bookmark; drives follower_count)
         │                      ├── waivers           (versioned, immutable text)
         │                      └── participations    (check-in/out; the WAIVER SIGNATURE;
         │                                             source of minutes → tokens)
@@ -45,6 +46,13 @@ Conceptual rules:
 - **Liveness is `status`**, everywhere: projects are `open|completed`, items are
   `active|closed`, claims have their lifecycle. No soft-delete columns exist
   except none at all — images are hard-deleted (nothing references them).
+- **A project is over** when `status='completed'` OR `now() > starts_at +
+  expected_minutes`. The feed splits on exactly this: **`upcoming` = not over**
+  (future or ongoing), **`past` = over** — complementary, so an ended event shows
+  under `past` and never under `upcoming`.
+- **A follow** (`follows`) is a lightweight bookmark / interest signal, one row
+  per (user, project), distinct from an RSVP (attendance intent). It carries no
+  powers; it only drives `is_following` and `follower_count`.
 
 ## DDL house style
 
@@ -138,6 +146,19 @@ CREATE TABLE IF NOT EXISTS rsvps (
   UNIQUE (project_id, user_id)                 -- constraint name: project_user
 );
 CREATE INDEX IF NOT EXISTS idx_rsvps_user ON rsvps(user_id);
+
+-- Follows: a lightweight interest/bookmark, one row per (user, project).
+-- Distinct from an RSVP (attendance intent); carries no powers. Created by
+-- POST /api/projects/{id}/follow (idempotent ON CONFLICT), removed by DELETE.
+-- Drives is_following (per requester) and follower_count in project detail.
+CREATE TABLE IF NOT EXISTS follows (
+  id         SERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, project_id)                 -- constraint name: uq_follow
+);
+CREATE INDEX IF NOT EXISTS idx_follows_project ON follows(project_id);
 
 -- Waiver text is immutable once created; edits INSERT a new version.
 -- Project creation seeds version 1 (default template if none supplied).

@@ -368,6 +368,8 @@ def test_list_card_is_over_reflects_backdated_project(register):
     pid = proj["id"]
     _make_over(pid)
 
-    card = _card(vol, pid)
+    # An ended project now lands under `past`, never `upcoming`.
+    assert _card(vol, pid, scope="upcoming") is None
+    card = _card(vol, pid, scope="past")
     assert card is not None
     assert card["is_over"] is True

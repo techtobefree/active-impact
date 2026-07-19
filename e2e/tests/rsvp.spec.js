@@ -117,6 +117,59 @@ test.describe('RSVP flow', () => {
     await expectNoGenericError(page);
   });
 
+  test('follow a service project', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('follow'), 'password123', 'Follow Volunteer');
+    const title = 'E2E Follow Project ' + uname(); // unique so the follower count is unambiguous
+    await createProject(page, title, dtLocal(7)); // future → live, never "over"
+
+    // Follow controls sit under the head, open to every signed-in viewer.
+    // Broad matcher so the same button survives the "Follow" ⇄ "✓ Following" flip.
+    const followBtn = page.getByRole('button', { name: /^(follow|✓ following)$/i });
+    await expect(followBtn).toHaveText(/^follow$/i);
+    await expect(page.getByText(/^0 followers$/i)).toBeVisible();
+
+    // Follow → button flips to "✓ Following" and the count increments in place.
+    await followBtn.click();
+    await expect(followBtn).toHaveText(/following/i);
+    await expect(page.getByText(/^1 follower$/i)).toBeVisible();
+    await shot(page, testInfo, 'following');
+    await expectNoGenericError(page);
+
+    // Unfollow → back to "Follow" and 0 followers.
+    await followBtn.click();
+    await expect(followBtn).toHaveText(/^follow$/i);
+    await expect(page.getByText(/^0 followers$/i)).toBeVisible();
+    await shot(page, testInfo, 'unfollowed');
+    await expectNoGenericError(page);
+  });
+
+  test('an ended event lands under Past, not Upcoming', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('pasttab'), 'password123', 'Past Tabs Organizer');
+    const title = 'E2E Ended Tab ' + uname(); // unique so tab membership is unambiguous
+    // Backdated via the API (the create form refuses past dates).
+    await page.evaluate(async (t) => {
+      const token = localStorage.getItem('ai_token');
+      const startsAt = new Date(Date.now() - 4 * 3600e3).toISOString();
+      await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ title: t, location_text: 'Old Hall', starts_at: startsAt, expected_minutes: 60 }),
+      });
+    }, title);
+
+    await page.goto('/#/');
+    await expect(page).toHaveURL(/#\/$/);
+    // Upcoming (default) must NOT list an ended event.
+    await expect(page.locator('a.card', { hasText: title })).toHaveCount(0);
+    await shot(page, testInfo, 'upcoming-excludes-ended');
+
+    // Past tab lists it.
+    await page.getByRole('button', { name: /^past$/i }).click();
+    await expect(page.locator('a.card', { hasText: title })).toBeVisible();
+    await shot(page, testInfo, 'past-includes-ended');
+    await expectNoGenericError(page);
+  });
+
   test('event images: first upload becomes the cover, and the cover can be switched', async ({ page }, testInfo) => {
     await registerUI(page, uemail('img'), 'password123', 'Photo Organizer');
     await createProject(page, 'E2E Photo Project', dtLocal(7));

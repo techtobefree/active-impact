@@ -26,7 +26,9 @@ export async function checkinView(code) {
   } else {
     renderAgree(action, code, project);
   }
-  mount(summaryCard(project), waiverBox(waiver), action);
+  const root = el('<div class="stack"></div>');
+  root.append(summaryCard(project), waiverBox(waiver), action);
+  mount(root);
 }
 
 // ---- pieces ----------------------------------------------------------------
