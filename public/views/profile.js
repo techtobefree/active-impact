@@ -43,23 +43,23 @@ export async function userView(id) {
   mount(card);
 }
 
-// A "Send tokens" button that reveals an inline tip form for `user`.
+// A "Tip" button that reveals an inline tip form for `user`.
 function tipSection(user) {
   const wrap = el('<div></div>');
-  const btn = el('<button class="act primary block">Send tokens</button>');
+  const btn = el('<button class="act primary block">Tip tokens</button>');
   btn.onclick = () => {
     const form = addForm({
-      title: 'Send tokens to ' + user.display_name,
+      title: 'Tip ' + user.display_name,
       fields: [
         { name: 'amount', label: 'Amount (🪙)', type: 'number', required: true, min: 1, step: 1, placeholder: '1' },
         { name: 'note', label: 'Note (optional)', type: 'textarea', rows: 2 },
       ],
-      submit: 'Send',
+      submit: 'Tip 🪙',
       onSubmit: async (body) => {
         await api('/tokens/tip', {
           body: { to_user_id: user.id, amount: body.amount, note: body.note },
         });
-        toast('Sent ' + body.amount + ' 🪙 to ' + user.display_name);
+        toast('Tipped ' + body.amount + ' 🪙 to ' + user.display_name);
         await refreshMe();
         form.replaceWith(btn); // collapse back to the button
       },

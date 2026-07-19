@@ -65,7 +65,7 @@ const ERRORS = {
   auth_required: 'Please sign in.',
   invalid_token: 'Your session expired — sign in again.',
   insufficient_balance: 'Not enough tokens.',
-  cannot_tip_self: "You can't send tokens to yourself.",
+  cannot_tip_self: "You can't tip yourself.",
   user_not_found: 'No account with that email.',
   not_found: 'Not found.',
   invalid_code: 'That check-in code is invalid or the project has ended.',

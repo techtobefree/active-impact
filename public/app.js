@@ -48,8 +48,12 @@ export async function refreshMe() {
 function updateChrome(hash, isPublic) {
   const topbar = document.getElementById('topbar');
   const nav = document.getElementById('nav');
-  topbar.classList.toggle('hidden', isPublic);
-  nav.classList.toggle('hidden', isPublic);
+  // The route table omits the flag for protected routes, so isPublic is `undefined`
+  // there. classList.toggle(cls, undefined) IGNORES the force arg and plain-toggles —
+  // which flips the chrome on every navigation. Coerce to a real boolean to force it.
+  const pub = !!isPublic;
+  topbar.classList.toggle('hidden', pub);
+  nav.classList.toggle('hidden', pub);
   const active = hash.startsWith('#/catalog') ? 'catalog'
     : hash.startsWith('#/wallet') ? 'wallet'
     : (hash.startsWith('#/me') || hash.startsWith('#/u/')) ? 'me'

@@ -146,7 +146,7 @@ export async function newView() {
     needBtn.classList.toggle('primary', kind === 'need');
     helper.textContent = kind === 'offer'
       ? 'Set a token price (0 = free). Claimants pay you when you accept.'
-      : 'People can send you tokens from your post.';
+      : 'People can tip you tokens from your post.';
 
     // Toggling offer/need rebuilds the form — carry the user's text across.
     const prev = formBox.querySelector('form');
@@ -386,7 +386,7 @@ function offerViewerCard(id, detail) {
 
 function needTipCard(id, detail) {
   const card = el('<div class="card stack"></div>');
-  card.append(el('<h3>Send tokens</h3>'));
+  card.append(el('<h3>Tip tokens</h3>'));
   card.append(el('<p class="muted small">Support this need — tokens go straight to the poster.</p>'));
 
   const form = addForm({
@@ -394,12 +394,12 @@ function needTipCard(id, detail) {
       { name: 'amount', label: 'Amount 🪙', type: 'number', required: true, min: 1, placeholder: '5' },
       { name: 'note', label: 'Note (optional)', placeholder: 'Thanks for posting this!' },
     ],
-    submit: 'Send tokens',
+    submit: 'Tip 🪙',
     onSubmit: async (body) => {
       body.to_user_id = detail.poster.id;
       body.catalog_item_id = Number(id);
       await api('/tokens/tip', { body });
-      toast('Tokens sent!');
+      toast('Tokens tipped!');
       form.reset();
       await refreshMe();
     },

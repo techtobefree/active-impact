@@ -75,7 +75,7 @@ roster check-out, close project.
 ## M4 — Wallet & tipping
 
 Ledger read + `transfer` primitive + tip endpoint. Frontend: wallet view
-(balance, ledger, send-tokens form), profile Send-tokens.
+(balance, ledger, tip form), profile Tip.
 
 - Tests: tip happy path (both balances, two ledger directions); insufficient
   409 **and nothing changed** (I9); self-tip 409; amount <1 422; unknown user

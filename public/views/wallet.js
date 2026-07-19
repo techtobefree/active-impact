@@ -1,4 +1,4 @@
-// Wallet: balance hero, send-tokens (tip), ledger, and both sides of my claims.
+// Wallet: balance hero, tip form, ledger, and both sides of my claims.
 import { api, currentUser } from '../api.js';
 import {
   el, esc, mount, addForm, statusPill, emptyState, spinner,
@@ -140,10 +140,10 @@ export async function walletView() {
     <div class="muted small">impact tokens</div>
   </section>`);
 
-  // ---- send tokens (tip) ----
+  // ---- tip tokens ----
   const tipForm = addForm({
-    title: 'Send tokens',
-    submit: 'Send 🪙',
+    title: 'Tip tokens',
+    submit: 'Tip 🪙',
     fields: [
       { name: 'to_email', label: 'To (email)', required: true, placeholder: 'their email',
         attrs: { autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', inputmode: 'email' },
@@ -155,7 +155,7 @@ export async function walletView() {
       // Errors propagate to addForm, which attributes them to the exact field
       // (unknown user -> To, insufficient balance -> Amount).
       await api('/tokens/tip', { body });
-      toast(`Sent ${body.amount} 🪙`);
+      toast(`Tipped ${body.amount} 🪙`);
       await refreshMe();
       refresh();
     },

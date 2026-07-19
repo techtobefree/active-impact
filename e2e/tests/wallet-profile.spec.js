@@ -10,7 +10,7 @@ test.describe('Wallet & profile', () => {
 
     await page.locator('input[name=to_email]').fill('ana@example.com');
     await page.locator('input[name=amount]').fill('1');
-    await page.getByRole('button', { name: /send/i }).click();
+    await page.getByRole('button', { name: /tip/i }).click();
     // The error must explain the real reason, attributed to the amount field.
     await expect(page.getByText(/not enough tokens|insufficient/i)).toBeVisible();
     await shot(page, testInfo, 'insufficient-tip');
@@ -32,7 +32,7 @@ test.describe('Wallet & profile', () => {
     await page.locator('input[name=to_email]').fill('ben@example.com');
     await page.locator('input[name=amount]').fill('1');
     await page.locator('input[name=note]').fill('great cleanup');
-    await page.getByRole('button', { name: /send/i }).click();
+    await page.getByRole('button', { name: /tip/i }).click();
 
     // Proof the token actually MOVED: balance drops by exactly one, and the
     // ledger shows a 'tip' row with the recipient's DISPLAY NAME (never email).
