@@ -33,9 +33,16 @@ python scripts/seed.py                # optional demo data (users ana/ben/mia, p
 ```bash
 . .venv/bin/activate
 docker compose up -d postgres
-python -m pytest -q                   # 136 tests: auth, ledger invariants, all domains
-python scripts/smoke.py http://localhost:8000   # end-to-end happy-path probe
+python -m pytest -q                   # 142 tests: auth, ledger invariants, all domains
+python scripts/smoke.py http://localhost:8000   # end-to-end happy-path probe (real HTTP)
 ```
+
+Three layers:
+- **`tests/`** — pytest (unit + integration against a real Postgres, run on every change).
+- **`scripts/smoke.py`** — a stdlib end-to-end happy-path probe over HTTP.
+- **`e2e/`** — a [Playwright layer](e2e/README.md) that drives the app *as a user*,
+  screenshots each step, and asserts each screen against expectations (e.g. a
+  validation error must state *why*). Run on demand: `cd e2e && npm install && BASE_URL=… npx playwright test`.
 
 ## Deploy (given a domain)
 
