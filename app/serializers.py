@@ -52,8 +52,10 @@ def user_public(row: dict) -> dict:
 
 
 def cover_image_id(entity: str, entity_id: int) -> int | None:
+    """The entity's cover: its primary image, else the first by id."""
     r = db.query_one(
-        "SELECT id FROM images WHERE entity=%s AND entity_id=%s ORDER BY id LIMIT 1",
+        "SELECT id FROM images WHERE entity=%s AND entity_id=%s "
+        "ORDER BY is_primary DESC, id ASC LIMIT 1",
         (entity, entity_id),
     )
     return r["id"] if r else None

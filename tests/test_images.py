@@ -42,16 +42,17 @@ def _offer(client, title="Free Bike"):
     return r.json()
 
 
-def _upload(client, entity, entity_id, content_type="image/png", data=TINY_B64):
-    return client.post(
-        "/api/images",
-        json={
-            "entity": entity,
-            "entity_id": entity_id,
-            "content_type": content_type,
-            "data_base64": data,
-        },
-    )
+def _upload(client, entity, entity_id, content_type="image/png", data=TINY_B64,
+            is_primary=None):
+    body = {
+        "entity": entity,
+        "entity_id": entity_id,
+        "content_type": content_type,
+        "data_base64": data,
+    }
+    if is_primary is not None:
+        body["is_primary"] = is_primary
+    return client.post("/api/images", json=body)
 
 
 # ---- upload: project leader authorization -----------------------------------
@@ -218,3 +219,110 @@ def test_delete_missing_404(register):
     r = ca.delete("/api/images/999999")
     assert r.status_code == 404
     assert r.json()["detail"] == "not_found"
+
+
+# ---- primary (cover) image --------------------------------------------------
+
+def _is_primary(client, image_id):
+    from app import db
+    r = db.query_one("SELECT is_primary FROM images WHERE id=%s", (image_id,))
+    return r["is_primary"]
+
+
+def test_first_upload_becomes_primary(register):
+    ca, a, _ = register("prim_a")
+    proj = _project(ca)
+    first = _upload(ca, "project", proj["id"]).json()["id"]
+    assert _is_primary(ca, first) is True
+
+    # A second upload does NOT steal primary automatically.
+    second = _upload(ca, "project", proj["id"]).json()["id"]
+    assert _is_primary(ca, second) is False
+    assert _is_primary(ca, first) is True
+
+    # Cover is the primary (the first), which also happens to be the lowest id.
+    detail = ca.get(f"/api/projects/{proj['id']}").json()
+    assert detail["cover_image_id"] == first
+    assert detail["primary_image_id"] == first
+
+
+def test_upload_with_is_primary_flag_unsets_others(register):
+    ca, a, _ = register("prim_b")
+    proj = _project(ca)
+    first = _upload(ca, "project", proj["id"]).json()["id"]
+    # Upload a new image explicitly flagged primary -> it takes over the cover.
+    second = _upload(ca, "project", proj["id"], is_primary=True).json()["id"]
+
+    assert _is_primary(ca, second) is True
+    assert _is_primary(ca, first) is False
+    detail = ca.get(f"/api/projects/{proj['id']}").json()
+    assert detail["cover_image_id"] == second
+    assert detail["primary_image_id"] == second
+
+
+def test_set_primary_endpoint_unsets_others(register):
+    ca, a, _ = register("prim_c")
+    proj = _project(ca)
+    first = _upload(ca, "project", proj["id"]).json()["id"]
+    second = _upload(ca, "project", proj["id"]).json()["id"]
+    assert _is_primary(ca, first) is True
+
+    r = ca.post(f"/api/images/{second}/primary")
+    assert r.status_code == 200, r.text
+    assert r.json()["is_primary"] is True
+
+    assert _is_primary(ca, second) is True
+    assert _is_primary(ca, first) is False
+    assert ca.get(f"/api/projects/{proj['id']}").json()["cover_image_id"] == second
+
+
+def test_cover_prefers_primary_over_first_id(register):
+    ca, a, _ = register("prim_d")
+    proj = _project(ca)
+    first = _upload(ca, "project", proj["id"]).json()["id"]
+    second = _upload(ca, "project", proj["id"]).json()["id"]
+    # Promote the higher-id image; cover must follow the primary, not the id order.
+    assert ca.post(f"/api/images/{second}/primary").status_code == 200
+    assert ca.get(f"/api/projects/{proj['id']}").json()["cover_image_id"] == second
+    assert second > first
+
+
+def test_delete_primary_falls_back_to_first(register):
+    ca, a, _ = register("prim_e")
+    proj = _project(ca)
+    first = _upload(ca, "project", proj["id"]).json()["id"]
+    second = _upload(ca, "project", proj["id"]).json()["id"]
+    # first is primary; delete it -> cover falls back to the next by id (second).
+    assert ca.delete(f"/api/images/{first}").status_code == 204
+    detail = ca.get(f"/api/projects/{proj['id']}").json()
+    assert detail["cover_image_id"] == second
+    # No primary row remains, but the serializer still returns a cover.
+    assert detail["primary_image_id"] == second
+
+
+def test_set_primary_forbidden_for_stranger(register):
+    ca, a, _ = register("prim_f")
+    cb, b, _ = register("stranger_f2")
+    proj = _project(ca)
+    image_id = _upload(ca, "project", proj["id"]).json()["id"]
+    r = cb.post(f"/api/images/{image_id}/primary")
+    assert r.status_code == 403
+
+
+def test_set_primary_missing_404(register):
+    ca, a, _ = register("prim_g")
+    r = ca.post("/api/images/999999/primary")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "not_found"
+
+
+def test_catalog_first_upload_primary_and_set(register):
+    ca, a, _ = register("prim_h")
+    item = _offer(ca)
+    first = _upload(ca, "catalog_item", item["id"]).json()["id"]
+    second = _upload(ca, "catalog_item", item["id"]).json()["id"]
+    assert _is_primary(ca, first) is True
+    assert ca.get(f"/api/catalog/{item['id']}").json()["cover_image_id"] == first
+
+    assert ca.post(f"/api/images/{second}/primary").status_code == 200
+    assert ca.get(f"/api/catalog/{item['id']}").json()["cover_image_id"] == second

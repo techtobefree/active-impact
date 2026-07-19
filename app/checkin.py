@@ -93,6 +93,12 @@ def agree(code: str, user: dict = Depends(current_user)):
     waiver = _current_waiver(project["id"])
     try:
         with db.tx() as c:
+            # Ensure the volunteer appears in the organizer's RSVP list (idempotent).
+            c.execute(
+                "INSERT INTO rsvps(project_id, user_id) VALUES (%s, %s) "
+                "ON CONFLICT (project_id, user_id) DO NOTHING",
+                (project["id"], user["id"]),
+            )
             row = c.execute(
                 "INSERT INTO participations(project_id, user_id, waiver_id) "
                 "VALUES (%s, %s, %s) RETURNING *",

@@ -47,7 +47,7 @@ and injects it into every protected handler.
 |---|---|---|
 | `GET /api/projects` 📄 | `?scope=upcoming` (default: `status='open' AND starts_at >= now()-'12 hours'`, ASC) · `past` (the rest, DESC) · `mine` (**participations ∪ leaderships** — a poster who never checked in still finds their project here). `&q=` ILIKE on title/description/location. Returns **project_card[]** | — |
 | `POST /api/projects` | `{title, description?, location_text, starts_at, expected_minutes, waiver_text?}` → **201** project detail. In one tx: insert project (fresh `checkin_code`), owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` template — placeholder marked *not legal advice*) | 422 |
-| `GET /api/projects/{id}` | Detail: card fields + `description`, `image_ids[]`, `leaders[] {id, display_name}`, `waiver {id, version, text}` (current), `am_leader`, `checkin_code` (**present only when `am_leader`** — feeds the lead screen's text fallback and smoke.py), `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` | 404 |
+| `GET /api/projects/{id}` | Detail: card fields + `description`, `image_ids[]`, `primary_image_id` (cover: primary else first by id, or null), `leaders[] {id, display_name}`, `waiver {id, version, text}` (current), `am_leader`, `is_over` (**`status='completed'` OR `now() > starts_at + expected_minutes`**), `my_rsvp {is_leader} \| null`, `checkin_code` (**present only when `am_leader`** — feeds the lead screen's text fallback and smoke.py), `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` | 404 |
 | `PATCH /api/projects/{id}` | Leader only. `{title?, description?, location_text?, starts_at?, expected_minutes?, waiver_text?}` — a **changed** `waiver_text` INSERTs waiver v(n+1) (I5) | 403 `not_a_leader`; 409 `project_not_open` |
 | `POST /api/projects/{id}/close` | Leader. `open → completed`; checks out ALL open participations, minting (capped math) in the same tx. Also how a project that never happened is ended — zero-minute participations mint 0 | 403; 409 `project_not_open` |
 | `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (the response shows display names, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
@@ -55,6 +55,10 @@ and injects it into every protected handler.
 | `POST /api/projects/{id}/code/regenerate` | Leader. New `checkin_code` (old QR instantly dead) → `{checkin_code}` | 403 |
 | `GET /api/projects/{id}/qr.svg` | Leader. `image/svg+xml` QR of `{scheme}://{host}/#/c/{checkin_code}` — **origin = `request.url.scheme` + Host**. Behind Caddy the scheme is https because the Dockerfile CMD runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` (trusting X-Forwarded-Proto; safe — only Caddy can reach the app). On the dev LAN it is honestly `http://<ip>:8000`, so M2's phone-scan verify works | 403 |
 | `GET /api/projects/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403 |
+| `POST /api/projects/{id}/rsvp` | RSVP any time the project is **not over**. Idempotent (`ON CONFLICT (project_id,user_id) DO NOTHING`). → project detail | 404; 409 `project_over` |
+| `POST /api/projects/{id}/checkin` | **Self-service check-in** (no QR, no waiver screen). Ensures an RSVP row, then inserts a participation pinned to the **current** waiver (I6). Re-check-in after checkout is fine while not over. → project detail | 404; 409 `project_over`; 409 `already_checked_in` |
+| `GET /api/projects/{id}/rsvps` | Organizer (`am_leader`) only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, created_at}]` | 403 `not_a_leader`; 404 |
+| `POST /api/projects/{id}/rsvps/{user_id}/leader` | Organizer only. `{is_leader: bool}` sets the event-leader **designation** (a flag with no powers yet — NOT `project_leaders`). → updated rsvps list | 403 `not_a_leader`; 404 `not_found` (that user never RSVP'd) |
 
 ## Check-in — `app/checkin.py`
 
@@ -64,7 +68,7 @@ The QR encodes a URL, so the volunteer's **native camera** opens the PWA at
 | Endpoint | Notes | Errors |
 |---|---|---|
 | `GET /api/checkin/{code}` | Resolve a scanned code → `{project: project_card, waiver: {id, version, text}, my_open_participation \| null}` | 404 `invalid_code` (unknown code or non-`open` project) |
-| `POST /api/checkin/{code}/agree` | **The signature.** → **201** participation. One tx: re-validate code, insert participation pinned to the **current** waiver version. Leaders check in through this same endpoint (their lead screen has the code) | 404 `invalid_code`; 409 `already_checked_in` |
+| `POST /api/checkin/{code}/agree` | **The signature.** → **201** participation. One tx: re-validate code, ensure an RSVP row (idempotent — so QR check-ins appear in the organizer's RSVP list), insert participation pinned to the **current** waiver version. Leaders check in through this same endpoint (their lead screen has the code) | 404 `invalid_code`; 409 `already_checked_in` |
 | `POST /api/participations/{id}/checkout` | Self **or** leader of that project. Runs the checkout math from DOMAIN.md (half-up minutes, capped tokens, mint) in one tx → updated participation incl. `minutes`, `tokens_awarded` | 403 `not_allowed`; 409 `already_checked_out`; 404 |
 
 ## Tokens — `app/tokens.py`
@@ -101,9 +105,10 @@ charity session can instead be posted as a *project* to earn via check-in.
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `POST /api/images` | `{entity: 'project'\|'catalog_item', entity_id, content_type, data_base64}` → **201** `{id}`. Only that entity's leader/poster may upload. Decoded size ≤ 10 MB | 403; 413 `image_too_large`; 422 `bad_content_type` |
+| `POST /api/images` | `{entity: 'project'\|'catalog_item', entity_id, content_type, data_base64, is_primary?}` → **201** `{id}`. Only that entity's leader/poster may upload. Decoded size ≤ 10 MB. **Cover:** if the entity has no primary yet the new image becomes primary automatically; `is_primary:true` force-sets it (unsetting the others in one tx) | 403; 413 `image_too_large`; 422 `bad_content_type` |
 | `GET /api/images/{id}` | Raw bytes, correct `Content-Type`, `Cache-Control: private, max-age=86400`. Auth required (D12) — frontend fetches with Bearer + blob URL | 404 |
-| `DELETE /api/images/{id}` | Uploader or entity leader/poster → **204** (hard delete — nothing references image rows) | 403; 404 |
+| `POST /api/images/{id}/primary` | Entity leader/poster only. Sets this image as the entity's cover and unsets the others in one tx → `{id, entity, entity_id, is_primary}` | 403; 404 |
+| `DELETE /api/images/{id}` | Uploader or entity leader/poster → **204** (hard delete — nothing references image rows). Deleting the primary is fine — the cover falls back to the first remaining by id | 403; 404 |
 
 ## Health — `app/main.py`
 

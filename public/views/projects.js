@@ -40,10 +40,12 @@ function projectCard(p) {
   card.append(el(`<div class="row" style="align-items:flex-start">
     <h3 class="grow">${esc(p.title)}</h3>${statusPill(p.status)}
   </div>`));
-  card.append(el(`<div class="tag">📍 ${esc(p.location_text)}</div>`));
-  card.append(el(`<div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>`));
-  card.append(el(`<div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>`));
-  card.append(el(`<div class="tag">👥 ${esc(p.checked_in_count)} checked in</div>`));
+  card.append(el(`<div class="meta">
+    <div class="tag">📍 ${esc(p.location_text)}</div>
+    <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
+    <div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>
+    <div class="tag">👥 ${esc(p.checked_in_count)} checked in</div>
+  </div>`));
   return card;
 }
 
@@ -148,40 +150,34 @@ export async function detailView(id) {
 
   const root = el('<div class="stack"></div>');
 
+  // Cover (primary image) — full-width at the top of the detail
+  if (p.primary_image_id) {
+    const cov = el('<img class="cover" alt="">');
+    apiBlobURL(`/images/${p.primary_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
+    root.append(cov);
+  }
+
   // Images
-  root.append(imagesStrip('project', id, p.image_ids, { canEdit: p.am_leader, onChange: refresh }));
+  root.append(imagesStrip('project', id, p.image_ids, { canEdit: p.am_leader, onChange: refresh, primaryId: p.primary_image_id }));
 
   // Title + status
   const head = el('<section class="card stack"></section>');
   head.append(el(`<div class="row" style="align-items:flex-start">
     <h1 class="grow">${esc(p.title)}</h1>${statusPill(p.status)}
   </div>`));
-  head.append(el(`<div class="tag">📍 ${esc(p.location_text)}</div>`));
-  head.append(el(`<div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>`));
-  head.append(el(`<div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>`));
-  head.append(el(`<div class="tag">👥 ${esc(p.checked_in_count)} on site</div>`));
-  if (p.my_hours_here > 0) {
+  head.append(el(`<div class="meta">
+    <div class="tag">📍 ${esc(p.location_text)}</div>
+    <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
+    <div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>
+    <div class="tag">👥 ${esc(p.checked_in_count)} on site</div>
+  </div>`));
+  if (p.my_hours_here > 0 && !p.is_over) {
     head.append(el(`<div class="muted small">You've logged ${esc(p.my_hours_here)} hours here.</div>`));
   }
   root.append(head);
 
-  // Checked-in banner + self checkout
-  if (p.my_open_participation) {
-    const co = el('<section class="card stack"></section>');
-    co.append(el(`<div class="banner info">✅ You're checked in${p.my_open_participation.checked_in_at ? ` since ${esc(fmtDateTime(p.my_open_participation.checked_in_at))}` : ''}.</div>`));
-    const btn = el('<button class="act primary block">Check out</button>');
-    btn.onclick = async () => {
-      btn.disabled = true;
-      try {
-        const row = await api(`/participations/${p.my_open_participation.id}/checkout`, { method: 'POST' });
-        toast(`🎉 ＋${row && row.tokens_awarded != null ? row.tokens_awarded : 0} tokens`);
-        await refreshMe();
-        refresh();
-      } catch (e) { btn.disabled = false; toastErr(e); }
-    };
-    co.append(btn);
-    root.append(co);
-  }
+  // Primary action — one action reflecting the RSVP / check-in state machine.
+  root.append(primaryActionBlock(id, p));
 
   // Leader actions
   if (p.am_leader) {
@@ -202,9 +198,18 @@ export async function detailView(id) {
     root.append(desc);
   }
 
-  // Leaders
+  // Who's coming (organizer-only): everyone who RSVP'd + a per-person leader toggle.
+  let whoLabel, whoWrap;
+  if (p.am_leader) {
+    whoLabel = el("<div class=\"section-label\">Who's coming</div>");
+    whoWrap = el('<section class="card stack"></section>');
+    whoWrap.append(spinner());
+    root.append(whoLabel, whoWrap);
+  }
+
+  // Organizers (the project_leaders with real powers — distinct from event leaders)
   if (p.leaders && p.leaders.length) {
-    root.append(el('<div class="section-label">Leaders</div>'));
+    root.append(el('<div class="section-label">Organizers</div>'));
     const wrap = el('<section class="card stack"></section>');
     for (const lead of p.leaders) {
       const row = el('<div class="row"></div>');
@@ -225,6 +230,101 @@ export async function detailView(id) {
   }
 
   mount(root);
+  if (p.am_leader) fillWhosComing(id, whoWrap, whoLabel);
+}
+
+// The single primary action reflecting is_over / participation / rsvp state.
+function primaryActionBlock(id, p) {
+  const block = el('<section class="card stack"></section>');
+
+  // Over: no action — a thank-you (with hours) or a plain ended banner.
+  if (p.is_over) {
+    block.append(el(p.my_hours_here > 0
+      ? `<div class="banner info">🎉 Thanks for volunteering — you logged ${esc(p.my_hours_here)} hours here.</div>`
+      : '<div class="banner">This event has ended.</div>'));
+    return block;
+  }
+
+  // Checked in: offer Check out.
+  if (p.my_open_participation) {
+    block.append(el(`<div class="banner info">✅ You're checked in${p.my_open_participation.checked_in_at ? ` since ${esc(fmtDateTime(p.my_open_participation.checked_in_at))}` : ''}.</div>`));
+    const btn = el('<button class="act primary block">Check out</button>');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const row = await api(`/participations/${p.my_open_participation.id}/checkout`, { method: 'POST' });
+        const n = row && row.tokens_awarded != null ? row.tokens_awarded : 0;
+        toast(n > 0 ? `🎉 ＋${n} tokens` : 'Checked out — thanks!');
+        await refreshMe();
+        refresh();
+      } catch (e) { btn.disabled = false; toastErr(e); }
+    };
+    block.append(btn);
+    return block;
+  }
+
+  // RSVP'd (not yet on site): offer Check in.
+  if (p.my_rsvp) {
+    block.append(el("<div class=\"muted\">✓ You're RSVP'd</div>"));
+    const btn = el('<button class="act primary block">Check in</button>');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { await api(`/projects/${id}/checkin`, { method: 'POST' }); refresh(); }
+      catch (e) { btn.disabled = false; toastErr(e); }
+    };
+    block.append(btn);
+    return block;
+  }
+
+  // Nothing yet: offer RSVP.
+  const btn = el('<button class="act primary block">RSVP</button>');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try { await api(`/projects/${id}/rsvp`, { method: 'POST' }); refresh(); }
+    catch (e) { btn.disabled = false; toastErr(e); }
+  };
+  block.append(btn);
+  return block;
+}
+
+// Load the RSVP roster into the organizer's "Who's coming" section.
+async function fillWhosComing(id, wrap, label) {
+  let rsvps;
+  try {
+    rsvps = await api(`/projects/${id}/rsvps`);
+  } catch (e) {
+    clear(wrap).append(errNode(e));
+    return;
+  }
+  label.textContent = `Who's coming (${rsvps.length})`;
+  clear(wrap);
+  if (!rsvps.length) { wrap.append(emptyState('No RSVPs yet.')); return; }
+  for (const r of rsvps) wrap.append(rsvpRow(id, r));
+}
+
+// One RSVP row: who, a "checked in" pill, and an event-leader toggle switch.
+function rsvpRow(id, r) {
+  const row = el('<div class="row"></div>');
+  row.append(avatarEl(r.user));
+  row.append(el(`<a class="grow" href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
+  if (r.is_checked_in) row.append(el('<span class="pill green">checked in</span>'));
+
+  const toggle = el('<label class="switch" title="Event leader"></label>');
+  toggle.append(el('<span class="small muted">Leader</span>'));
+  const cb = el('<input type="checkbox">');
+  cb.checked = !!r.is_leader;
+  toggle.append(cb, el('<span class="slider"></span>'));
+  cb.onchange = async () => {
+    const next = cb.checked;
+    cb.disabled = true;
+    try {
+      await api(`/projects/${id}/rsvps/${encodeURIComponent(r.user.id)}/leader`, { body: { is_leader: next } });
+      r.is_leader = next;
+    } catch (e) { cb.checked = !next; toastErr(e); }
+    finally { cb.disabled = false; }
+  };
+  row.append(toggle);
+  return row;
 }
 
 // Inline edit form (leaders only). PATCH; a changed waiver_text versions server-side.
@@ -362,7 +462,7 @@ export async function leadView(id) {
 
   // ---- images ----
   root.append(el('<div class="section-label">Photos</div>'));
-  root.append(imagesStrip('project', id, p.image_ids, { canEdit: true, onChange: refresh }));
+  root.append(imagesStrip('project', id, p.image_ids, { canEdit: true, onChange: refresh, primaryId: p.primary_image_id }));
 
   // ---- close ----
   if (p.status === 'open') {

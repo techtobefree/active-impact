@@ -225,7 +225,7 @@ export async function detailView(id) {
     desc.textContent = detail.description;
     head.append(desc);
   }
-  head.append(imagesStrip('catalog_item', Number(id), detail.image_ids, { canEdit: isPoster, onChange: refresh }));
+  head.append(imagesStrip('catalog_item', Number(id), detail.image_ids, { canEdit: isPoster, onChange: refresh, primaryId: detail.cover_image_id }));
   wrap.append(head);
 
   if (isPoster) {

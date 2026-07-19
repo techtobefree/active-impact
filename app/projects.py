@@ -115,6 +115,10 @@ class AddLeaderIn(BaseModel):
         return v.strip().lower()
 
 
+class LeaderFlagIn(BaseModel):
+    is_leader: bool
+
+
 # ---- helpers ----------------------------------------------------------------
 
 def _new_code() -> str:
@@ -149,6 +153,56 @@ def _current_waiver(project_id: int) -> dict | None:
     )
 
 
+def _is_over(row: dict) -> bool:
+    """A project is over when completed OR now() is past starts_at + expected_minutes."""
+    if row["status"] == "completed":
+        return True
+    r = db.query_one(
+        "SELECT (now() > (%s::timestamptz + make_interval(mins => %s))) AS over",
+        (row["starts_at"], row["expected_minutes"]),
+    )
+    return bool(r["over"])
+
+
+def _my_rsvp(project_id: int, user_id: int) -> dict | None:
+    r = db.query_one(
+        "SELECT is_leader FROM rsvps WHERE project_id = %s AND user_id = %s",
+        (project_id, user_id),
+    )
+    return {"is_leader": r["is_leader"]} if r else None
+
+
+def _rsvps(project_id: int) -> list[dict]:
+    """Everyone who RSVP'd, oldest first, with their check-in / participation state."""
+    rows = db.query(
+        "SELECT user_id, is_leader, created_at FROM rsvps WHERE project_id = %s "
+        "ORDER BY created_at, user_id",
+        (project_id,),
+    )
+    out = []
+    for r in rows:
+        uid = r["user_id"]
+        is_checked_in = db.query_one(
+            "SELECT 1 FROM participations WHERE project_id = %s AND user_id = %s "
+            "AND checked_out_at IS NULL",
+            (project_id, uid),
+        ) is not None
+        has_participated = db.query_one(
+            "SELECT 1 FROM participations WHERE project_id = %s AND user_id = %s",
+            (project_id, uid),
+        ) is not None
+        out.append(
+            {
+                "user": serializers.user_brief(uid),
+                "is_leader": r["is_leader"],
+                "is_checked_in": is_checked_in,
+                "has_participated": has_participated,
+                "created_at": r["created_at"],
+            }
+        )
+    return out
+
+
 def _detail(row: dict, user_id: int) -> dict:
     """Full project detail from a fetched projects row, from user_id's view."""
     pid = row["id"]
@@ -179,9 +233,12 @@ def _detail(row: dict, user_id: int) -> dict:
         {
             "description": row["description"],
             "image_ids": image_ids,
+            "primary_image_id": serializers.cover_image_id("project", pid),
             "leaders": _leaders(pid),
             "waiver": _current_waiver(pid),
             "am_leader": am_leader,
+            "is_over": _is_over(row),
+            "my_rsvp": _my_rsvp(pid, user_id),
             "my_open_participation": (
                 {"id": my_open["id"], "checked_in_at": my_open["checked_in_at"]}
                 if my_open
@@ -420,6 +477,88 @@ def remove_leader(
     if not removed:
         raise api_error(404, "not_found")
     return Response(status_code=204)
+
+
+# ---- RSVP / self check-in ---------------------------------------------------
+
+@router.post("/projects/{project_id}/rsvp")
+def rsvp(project_id: int, user: dict = Depends(current_user)):
+    """RSVP to a project any time it is not over. Idempotent."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    if _is_over(row):
+        raise api_error(409, "project_over")
+    with db.tx() as c:
+        c.execute(
+            "INSERT INTO rsvps(project_id, user_id) VALUES (%s, %s) "
+            "ON CONFLICT (project_id, user_id) DO NOTHING",
+            (project_id, user["id"]),
+        )
+    return _detail(_get_project(project_id), user["id"])
+
+
+@router.post("/projects/{project_id}/checkin")
+def self_checkin(project_id: int, user: dict = Depends(current_user)):
+    """Self-service check-in (no QR, no waiver screen): ensure an RSVP, then
+    create a participation pinned to the CURRENT waiver (I6). Silent waiver pin."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    if _is_over(row):
+        raise api_error(409, "project_over")
+    waiver = _current_waiver(project_id)
+    try:
+        with db.tx() as c:
+            c.execute(
+                "INSERT INTO rsvps(project_id, user_id) VALUES (%s, %s) "
+                "ON CONFLICT (project_id, user_id) DO NOTHING",
+                (project_id, user["id"]),
+            )
+            c.execute(
+                "INSERT INTO participations(project_id, user_id, waiver_id) "
+                "VALUES (%s, %s, %s)",
+                (project_id, user["id"], waiver["id"]),
+            )
+    except psycopg.errors.UniqueViolation:
+        raise api_error(409, "already_checked_in")
+    return _detail(_get_project(project_id), user["id"])
+
+
+# ---- RSVP roster + event-leader designation ---------------------------------
+
+@router.get("/projects/{project_id}/rsvps")
+def list_rsvps(project_id: int, user: dict = Depends(current_user)):
+    """The organizer's view of everyone who RSVP'd. Leaders (am_leader) only."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    if not _is_leader(project_id, user["id"]):
+        raise api_error(403, "not_a_leader")
+    return _rsvps(project_id)
+
+
+@router.post("/projects/{project_id}/rsvps/{user_id}/leader")
+def set_rsvp_leader(
+    project_id: int,
+    user_id: int,
+    body: LeaderFlagIn,
+    user: dict = Depends(current_user),
+):
+    """Toggle a RSVP'd volunteer's event-leader designation. Organizer only."""
+    row = _get_project(project_id)
+    if not row:
+        raise api_error(404, "not_found")
+    if not _is_leader(project_id, user["id"]):
+        raise api_error(403, "not_a_leader")
+    with db.tx() as c:
+        cur = c.execute(
+            "UPDATE rsvps SET is_leader = %s WHERE project_id = %s AND user_id = %s",
+            (body.is_leader, project_id, user_id),
+        )
+        if cur.rowcount == 0:
+            raise api_error(404, "not_found")
+    return _rsvps(project_id)
 
 
 # ---- check-in code + QR -----------------------------------------------------

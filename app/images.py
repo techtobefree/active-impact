@@ -34,6 +34,7 @@ class ImageUpload(BaseModel):
     entity_id: int
     content_type: str
     data_base64: str
+    is_primary: bool = False
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -78,9 +79,23 @@ def upload_image(body: ImageUpload, user: dict = Depends(current_user)):
         raise api_error(413, "image_too_large")
 
     with db.tx() as c:
+        has_primary = c.execute(
+            "SELECT 1 FROM images WHERE entity = %s AND entity_id = %s "
+            "AND is_primary = true",
+            (body.entity, body.entity_id),
+        ).fetchone() is not None
+        # Force-set primary, or become primary automatically when none exists yet.
+        make_primary = body.is_primary or not has_primary
+        if make_primary and has_primary:
+            c.execute(
+                "UPDATE images SET is_primary = false "
+                "WHERE entity = %s AND entity_id = %s AND is_primary = true",
+                (body.entity, body.entity_id),
+            )
         row = c.execute(
             "INSERT INTO images(entity, entity_id, content_type, bytes, size, "
-            "uploaded_by) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            "uploaded_by, is_primary) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING id",
             (
                 body.entity,
                 body.entity_id,
@@ -88,9 +103,34 @@ def upload_image(body: ImageUpload, user: dict = Depends(current_user)):
                 data,  # psycopg3 adapts a bytes object to BYTEA
                 len(data),
                 user["id"],
+                make_primary,
             ),
         ).fetchone()
     return {"id": row["id"]}
+
+
+# ---- set primary (cover) ----------------------------------------------------
+
+@router.post("/images/{image_id}/primary")
+def set_primary(image_id: int, user: dict = Depends(current_user)):
+    """Make this image the entity's cover; unset the others, in one tx.
+
+    Only the owning entity's leader/poster may set the cover (reuses _may_manage).
+    """
+    row = _get_image(image_id)
+    if not row:
+        raise api_error(404, "not_found")
+    if not _may_manage(row["entity"], row["entity_id"], user["id"]):
+        code = "not_a_leader" if row["entity"] == "project" else "not_yours"
+        raise api_error(403, code)
+    with db.tx() as c:
+        c.execute(
+            "UPDATE images SET is_primary = (id = %s) "
+            "WHERE entity = %s AND entity_id = %s",
+            (image_id, row["entity"], row["entity_id"]),
+        )
+    return {"id": image_id, "entity": row["entity"],
+            "entity_id": row["entity_id"], "is_primary": True}
 
 
 # ---- stream (auth required) -------------------------------------------------

@@ -14,6 +14,8 @@
 ```
 users ──┬── sessions                    (opaque bearer tokens, 30-day expiry)
         ├── projects (owner) ──┬── project_leaders   (owner auto-added; leaders manage)
+        │                      ├── rsvps             (RSVP intent; is_leader = event-leader
+        │                      │                      DESIGNATION, a flag with no powers yet)
         │                      ├── waivers           (versioned, immutable text)
         │                      └── participations    (check-in/out; the WAIVER SIGNATURE;
         │                                             source of minutes → tokens)
@@ -114,6 +116,20 @@ CREATE TABLE IF NOT EXISTS project_leaders (
 );
 CREATE INDEX IF NOT EXISTS idx_leaders_user ON project_leaders(user_id);
 
+-- RSVP / check-in intent. One row per (project, user), created by
+-- POST /api/projects/{id}/rsvp, self check-in, or a QR agree (all idempotent).
+-- is_leader is an event-leader DESIGNATION (a pure flag with no powers yet),
+-- toggled by the organizer -- DISTINCT from project_leaders (organizers).
+CREATE TABLE IF NOT EXISTS rsvps (
+  id         SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id),
+  is_leader  BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, user_id)                 -- constraint name: project_user
+);
+CREATE INDEX IF NOT EXISTS idx_rsvps_user ON rsvps(user_id);
+
 -- Waiver text is immutable once created; edits INSERT a new version.
 -- Project creation seeds version 1 (default template if none supplied).
 CREATE TABLE IF NOT EXISTS waivers (
@@ -207,6 +223,12 @@ CREATE INDEX IF NOT EXISTS idx_claims_item     ON catalog_claims(item_id);
 
 -- Photos live in Postgres (BYTEA). Client resizes to <=1600px JPEG before upload.
 -- DELETE /api/images/{id} hard-deletes the row (nothing references images).
+-- is_primary marks the entity's COVER. On upload, if the entity has no primary
+-- yet, the new image becomes primary automatically; POST /api/images/{id}/primary
+-- (or upload with is_primary=true) sets one and unsets the others in one tx.
+-- COVER RULE: cover_image_id = the primary image, else the first by id
+--   (ORDER BY is_primary DESC, id ASC LIMIT 1) -- so deleting the primary falls
+--   back to the first remaining image.
 CREATE TABLE IF NOT EXISTS images (
   id           BIGSERIAL PRIMARY KEY,
   entity       TEXT NOT NULL CHECK (entity IN ('project', 'catalog_item')),
@@ -215,6 +237,7 @@ CREATE TABLE IF NOT EXISTS images (
   bytes        BYTEA NOT NULL,
   size         INTEGER NOT NULL CHECK (size > 0 AND size <= 10485760),  -- 10 MB
   uploaded_by  INTEGER REFERENCES users(id),
+  is_primary   BOOLEAN NOT NULL DEFAULT false,          -- the entity's cover
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_images_entity ON images(entity, entity_id);
@@ -302,7 +325,7 @@ volunteers (flat rate is intent).
   Σ `earn` entries, `projects_joined` = count distinct closed participations'
   projects). Balance is **private** (only in `/api/me`).
 - **project_card**: `id, title, location_text, starts_at, expected_minutes,
-  status, cover_image_id (first image or null), checked_in_count, owner {id,
+  status, cover_image_id (primary image, else first by id, or null), checked_in_count, owner {id,
   display_name}`.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
   cover_image_id, poster {id, display_name}, created_at`.

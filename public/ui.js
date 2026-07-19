@@ -75,6 +75,7 @@ const ERRORS = {
   not_a_leader: 'Only project leaders can do that.',
   not_yours: "That's not yours to change.",
   project_not_open: 'This project is no longer open.',
+  project_over: 'This event has ended.',
   already_leader: 'Already a leader.',
   cannot_remove_owner: "The owner can't be removed.",
   not_claimable: "This can't be claimed.",
@@ -289,27 +290,42 @@ export function resizeImage(file, maxDim = 1600, quality = 0.8) {
 }
 
 // A strip of an entity's images (authed blob URLs) with optional add/delete.
-export function imagesStrip(entity, entityId, imageIds, { canEdit = false, onChange } = {}) {
+// primaryId (the cover) gets a ★ badge; non-primary thumbs get "Make primary".
+export function imagesStrip(entity, entityId, imageIds, { canEdit = false, onChange, primaryId = null } = {}) {
   const strip = el('<div class="strip"></div>');
   for (const id of imageIds || []) {
+    const isPrimary = primaryId != null && id === primaryId;
     const im = el('<img class="thumb" alt="photo" />');
     apiBlobURL(`/images/${id}`).then((u) => { im.src = u; }).catch(() => {});
-    if (canEdit) {
-      const wrap = el('<div style="position:relative"></div>');
-      const x = el('<button class="act del" style="position:absolute;top:2px;right:2px;padding:.1rem .4rem" title="Remove">✕</button>');
-      x.onclick = async () => {
-        if (!confirm('Remove this photo?')) return; // destructive, like every other confirm
-        try { await api(`/images/${id}`, { method: 'DELETE' }); onChange && onChange(); }
-        catch (e) { toastErr(e); }
-      };
-      wrap.append(im, x); strip.append(wrap);
+    if (canEdit || isPrimary) {
+      const wrap = el('<div class="thumb-wrap"></div>');
+      wrap.append(im);
+      if (isPrimary) wrap.append(el('<span class="primary-badge" title="Cover photo">★</span>'));
+      if (canEdit) {
+        const x = el('<button class="thumb-btn thumb-del" title="Remove photo">✕</button>');
+        x.onclick = async () => {
+          if (!confirm('Remove this photo?')) return; // destructive, like every other confirm
+          try { await api(`/images/${id}`, { method: 'DELETE' }); onChange && onChange(); }
+          catch (e) { toastErr(e); }
+        };
+        wrap.append(x);
+        if (!isPrimary) {
+          const mk = el('<button class="thumb-btn thumb-star" title="Make this the cover photo">☆</button>');
+          mk.onclick = async () => {
+            try { await api(`/images/${id}/primary`, { method: 'POST' }); onChange && onChange(); }
+            catch (e) { toastErr(e); }
+          };
+          wrap.append(mk);
+        }
+      }
+      strip.append(wrap);
     } else {
       strip.append(im);
     }
   }
   if (canEdit) {
     // No capture attr: mobile browsers then offer BOTH camera and photo library.
-    const add = el('<label class="act ghost" style="cursor:pointer">📷 Add<input type="file" accept="image/*" hidden></label>');
+    const add = el('<label class="thumb-add" title="Add photo"><span class="big">📷</span><span>Add</span><input type="file" accept="image/*" hidden></label>');
     add.querySelector('input').onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;

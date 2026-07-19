@@ -16,6 +16,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -98,6 +99,21 @@ class ProjectLeader(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     added_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (Index("idx_leaders_user", "user_id"),)
+
+
+class Rsvp(Base):
+    __tablename__ = "rsvps"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # Event-leader DESIGNATION -- a pure flag with no powers yet. Distinct from
+    # project_leaders (organizers). Toggled by the organizer (am_leader).
+    is_leader: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="project_user"),
+        Index("idx_rsvps_user", "user_id"),
+    )
 
 
 class Waiver(Base):
@@ -206,6 +222,7 @@ class Image(Base):
     bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("entity IN ('project', 'catalog_item')", name="entity_valid"),
