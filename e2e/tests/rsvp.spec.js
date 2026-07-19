@@ -35,8 +35,8 @@ test.describe('RSVP flow', () => {
     await shot(page, testInfo, 'rsvp-available');
     await rsvp.click();
 
-    // RSVP'd → "Check in" + a confirmation line + you appear in Who's coming.
-    await expect(page.getByText(/You're RSVP'd/i)).toBeVisible();
+    // RSVP'd → "Check in" (the action sits to the right of the details) + you
+    // appear in Who's coming.
     const checkin = page.getByRole('button', { name: /^check in$/i });
     await expect(checkin).toBeVisible();
     await expect(page.getByText(/Who's coming \(1\)/i)).toBeVisible();
@@ -54,15 +54,41 @@ test.describe('RSVP flow', () => {
     await page.getByRole('button', { name: /^check in$/i }).click();
     const checkout = page.getByRole('button', { name: /^check out$/i });
     await expect(checkout).toBeVisible();
-    await expect(page.getByText(/You're checked in/i)).toBeVisible();
     await shot(page, testInfo, 'checked-in');
     await expectNoGenericError(page);
 
     // Check out while still live → the action returns to "Check in" (RSVP persists).
     await checkout.click();
     await expect(page.getByRole('button', { name: /^check in$/i })).toBeVisible();
-    await expect(page.getByText(/You're RSVP'd/i)).toBeVisible();
     await shot(page, testInfo, 'back-to-check-in');
+    await expectNoGenericError(page);
+  });
+
+  test('act on a project straight from the events list', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('feed'), 'password123', 'Feed Volunteer');
+    await createProject(page, 'E2E Feed Action', dtLocal(7)); // future → live, never "over"
+
+    // Back to the events list (Upcoming).
+    await page.goto('/#/');
+    await expect(page).toHaveURL(/#\/$/);
+
+    // Find the card and RSVP straight from the feed.
+    const card = page.locator('a.card', { hasText: 'E2E Feed Action' });
+    await expect(card).toBeVisible();
+    await card.getByRole('button', { name: /^rsvp$/i }).click();
+
+    // The button must act in place: URL is STILL the list (did not open the
+    // detail), and the card's button now reads "Check in".
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(card.getByRole('button', { name: /^check in$/i })).toBeVisible();
+    await shot(page, testInfo, 'list-rsvpd');
+    await expectNoGenericError(page);
+
+    // Check in from the feed → "Check out", still without leaving the list.
+    await card.getByRole('button', { name: /^check in$/i }).click();
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(card.getByRole('button', { name: /^check out$/i })).toBeVisible();
+    await shot(page, testInfo, 'list-checked-in');
     await expectNoGenericError(page);
   });
 
@@ -82,7 +108,8 @@ test.describe('RSVP flow', () => {
 
     await page.goto('/#/projects/' + id);
     await expect(page.getByRole('heading', { name: 'E2E Ended Event' })).toBeVisible();
-    await expect(page.getByText(/has ended/i)).toBeVisible();
+    // Over → no button, just an "Ended" chip to the right of the details.
+    await expect(page.getByText(/^Ended$/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /^rsvp$/i })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^check in$/i })).toHaveCount(0);
     await shot(page, testInfo, 'ended');

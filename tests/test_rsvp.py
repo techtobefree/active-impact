@@ -39,6 +39,15 @@ def _make_over(project_id):
     )
 
 
+def _backdate(participation_id, minutes):
+    """Pretend the volunteer checked in ``minutes`` ago (drives logged-hours math)."""
+    db.query(
+        "UPDATE participations SET checked_in_at = now() - make_interval(mins => %s) "
+        "WHERE id = %s",
+        (minutes, participation_id),
+    )
+
+
 # ---- RSVP: idempotent + detail flags ----------------------------------------
 
 def test_rsvp_creates_and_is_idempotent(register):
@@ -291,3 +300,74 @@ def test_qr_checkin_appears_in_rsvps(register):
     assert vol.post(f"/api/checkin/{code}/agree").status_code == 201
     rows = owner.get(f"/api/projects/{proj['id']}/rsvps").json()
     assert any(row["user"]["id"] == v["id"] for row in rows)
+
+
+# ---- GET /projects cards carry per-user action state (no N+1) ----------------
+
+def _card(client, project_id, scope="upcoming"):
+    """Find this project's card in the GET /projects feed for the requesting user."""
+    rows = client.get(f"/api/projects?scope={scope}").json()
+    for row in rows:
+        if row["id"] == project_id:
+            return row
+    return None
+
+
+def test_list_cards_carry_action_state(register):
+    owner, _o, _ = register("owner_list_a")
+    vol, _v, _ = register("vol_list_a")
+    proj = make_project(owner)
+    pid = proj["id"]
+
+    # Fresh card: the four fields exist and reflect an untouched project.
+    card = _card(vol, pid)
+    assert card is not None
+    assert card["is_over"] is False
+    assert card["my_rsvp"] is None
+    assert card["my_open_participation"] is None
+    assert card["my_hours_here"] == 0.0
+
+    # After RSVP: the same project's card carries my_rsvp.
+    assert vol.post(f"/api/projects/{pid}/rsvp").status_code == 200
+    card = _card(vol, pid)
+    assert card["my_rsvp"] == {"is_leader": False}
+    assert card["my_open_participation"] is None
+
+    # After check-in: the card carries my_open_participation.
+    part = vol.post(f"/api/projects/{pid}/checkin").json()["my_open_participation"]
+    card = _card(vol, pid)
+    assert card["my_open_participation"] is not None
+    assert card["my_open_participation"]["id"] == part["id"]
+
+    # After a backdated checkout: my_hours_here reflects the logged time.
+    _backdate(part["id"], 90)
+    assert vol.post(f"/api/participations/{part['id']}/checkout").status_code == 200
+    card = _card(vol, pid)
+    assert card["my_open_participation"] is None
+    assert card["my_hours_here"] == 1.5
+
+
+def test_list_card_state_is_per_user(register):
+    owner, _o, _ = register("owner_list_b")
+    vol_a, _a, _ = register("vol_list_b_a")
+    vol_b, _b, _ = register("vol_list_b_b")
+    proj = make_project(owner)
+    pid = proj["id"]
+
+    assert vol_a.post(f"/api/projects/{pid}/rsvp").status_code == 200
+
+    # vol_a sees their RSVP on the card; vol_b (who never RSVP'd) does not.
+    assert _card(vol_a, pid)["my_rsvp"] == {"is_leader": False}
+    assert _card(vol_b, pid)["my_rsvp"] is None
+
+
+def test_list_card_is_over_reflects_backdated_project(register):
+    owner, _o, _ = register("owner_list_c")
+    vol, _v, _ = register("vol_list_c")
+    proj = make_project(owner)
+    pid = proj["id"]
+    _make_over(pid)
+
+    card = _card(vol, pid)
+    assert card is not None
+    assert card["is_over"] is True

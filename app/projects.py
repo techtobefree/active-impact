@@ -295,7 +295,57 @@ def list_projects(
     )
     params += [page.limit, page.offset]
     rows = db.query(sql, params)
-    return [serializers.project_card(r) for r in rows]
+    cards = [serializers.project_card(r) for r in rows]
+    if not rows:
+        return cards
+
+    pids = [r["id"] for r in rows]
+    uid = user["id"]
+
+    over_map = {
+        r["id"]: r["is_over"]
+        for r in db.query(
+            "SELECT id, (status = 'completed' "
+            "OR now() > starts_at + make_interval(mins => expected_minutes)) "
+            "AS is_over FROM projects WHERE id = ANY(%s)",
+            (pids,),
+        )
+    }
+    rsvp_map = {
+        r["project_id"]: {"is_leader": r["is_leader"]}
+        for r in db.query(
+            "SELECT project_id, is_leader FROM rsvps "
+            "WHERE user_id = %s AND project_id = ANY(%s)",
+            (uid, pids),
+        )
+    }
+    open_map = {
+        r["project_id"]: {"id": r["id"], "checked_in_at": r["checked_in_at"]}
+        for r in db.query(
+            "SELECT DISTINCT ON (project_id) project_id, id, checked_in_at "
+            "FROM participations "
+            "WHERE user_id = %s AND checked_out_at IS NULL AND project_id = ANY(%s) "
+            "ORDER BY project_id",
+            (uid, pids),
+        )
+    }
+    hours_map = {
+        r["project_id"]: r["m"]
+        for r in db.query(
+            "SELECT project_id, COALESCE(SUM(minutes), 0) AS m FROM participations "
+            "WHERE user_id = %s AND checked_out_at IS NOT NULL AND project_id = ANY(%s) "
+            "GROUP BY project_id",
+            (uid, pids),
+        )
+    }
+
+    for card in cards:
+        cid = card["id"]
+        card["is_over"] = over_map[cid]
+        card["my_rsvp"] = rsvp_map.get(cid)
+        card["my_open_participation"] = open_map.get(cid)
+        card["my_hours_here"] = round(int(hours_map.get(cid, 0)) / 60, 1)
+    return cards
 
 
 # ---- create -----------------------------------------------------------------

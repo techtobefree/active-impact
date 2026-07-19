@@ -29,7 +29,63 @@ function toLocalInput(iso) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// A project_card -> a tappable card node.
+// A compact action node reflecting the is_over / participation / rsvp state
+// machine — shared by the detail head and every list card. Returns ONE node.
+// `onDone(p.id)` fires after a successful action so the caller can refresh in
+// place. `stopNav` swallows the click so a button living inside a list card's
+// <a> never navigates into the detail.
+function actionEl(p, onDone, { stopNav = false } = {}) {
+  const guard = (e) => { if (stopNav) { e.preventDefault(); e.stopPropagation(); } };
+
+  // Over: no action — a thank-you chip (with hours) or a plain "Ended" chip.
+  if (p.is_over) {
+    return el(p.my_hours_here > 0
+      ? `<span class="pill green">🎉 ${esc(p.my_hours_here)}h</span>`
+      : '<span class="pill muted">Ended</span>');
+  }
+
+  // Checked in: offer Check out.
+  if (p.my_open_participation) {
+    const btn = el('<button class="act primary">Check out</button>');
+    btn.onclick = async (e) => {
+      guard(e);
+      btn.disabled = true;
+      try {
+        const row = await api(`/participations/${p.my_open_participation.id}/checkout`, { method: 'POST' });
+        const n = row && row.tokens_awarded != null ? row.tokens_awarded : 0;
+        toast(n > 0 ? `🎉 ＋${n} tokens` : 'Checked out — thanks!');
+        onDone(p.id);
+      } catch (err) { btn.disabled = false; toastErr(err); }
+    };
+    return btn;
+  }
+
+  // RSVP'd (not yet on site): offer Check in.
+  if (p.my_rsvp) {
+    const btn = el('<button class="act primary">Check in</button>');
+    btn.onclick = async (e) => {
+      guard(e);
+      btn.disabled = true;
+      try { await api(`/projects/${p.id}/checkin`, { method: 'POST' }); onDone(p.id); }
+      catch (err) { btn.disabled = false; toastErr(err); }
+    };
+    return btn;
+  }
+
+  // Nothing yet: offer RSVP.
+  const btn = el('<button class="act primary">RSVP</button>');
+  btn.onclick = async (e) => {
+    guard(e);
+    btn.disabled = true;
+    try { await api(`/projects/${p.id}/rsvp`, { method: 'POST' }); onDone(p.id); }
+    catch (err) { btn.disabled = false; toastErr(err); }
+  };
+  return btn;
+}
+
+// A project_card -> a tappable card node: cover on top, then a details-left /
+// action-right row. The button acts in place (see renderBody) so the current
+// tab and scroll are preserved, and never navigates (stopNav) despite the <a>.
 function projectCard(p) {
   const card = el(`<a class="card" href="#/projects/${p.id}" style="display:block"></a>`);
   if (p.cover_image_id) {
@@ -37,15 +93,32 @@ function projectCard(p) {
     apiBlobURL(`/images/${p.cover_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
     card.append(cov);
   }
-  card.append(el(`<div class="row" style="align-items:flex-start">
-    <h3 class="grow">${esc(p.title)}</h3>${statusPill(p.status)}
-  </div>`));
-  card.append(el(`<div class="meta">
-    <div class="tag">📍 ${esc(p.location_text)}</div>
-    <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
-    <div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>
-    <div class="tag">👥 ${esc(p.checked_in_count)} checked in</div>
-  </div>`));
+  const body = el('<div></div>');
+  card.append(body);
+  const renderBody = (proj) => {
+    clear(body);
+    const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+    const details = el('<div class="grow" style="min-width:0"></div>');
+    details.append(el(`<div class="row" style="align-items:flex-start">
+      <h3 class="grow">${esc(proj.title)}</h3>${statusPill(proj.status)}
+    </div>`));
+    details.append(el(`<div class="meta">
+      <div class="tag">📍 ${esc(proj.location_text)}</div>
+      <div class="tag">🗓 ${esc(fmtDateTime(proj.starts_at))}</div>
+      <div class="tag">⏱ ${esc(fmtDuration(proj.expected_minutes))}</div>
+      <div class="tag">👥 ${esc(proj.checked_in_count)} checked in</div>
+    </div>`));
+    row.append(details);
+    const cell = el('<div class="action-cell"></div>');
+    cell.append(actionEl(proj, async (id) => {
+      await refreshMe();
+      const fresh = await api('/projects/' + id);
+      renderBody(fresh);
+    }, { stopNav: true }));
+    row.append(cell);
+    body.append(row);
+  };
+  renderBody(p);
   return card;
 }
 
@@ -160,24 +233,28 @@ export async function detailView(id) {
   // Images
   root.append(imagesStrip('project', id, p.image_ids, { canEdit: p.am_leader, onChange: refresh, primaryId: p.primary_image_id }));
 
-  // Title + status
+  // Title + status + meta on the LEFT, the primary action on the RIGHT.
   const head = el('<section class="card stack"></section>');
-  head.append(el(`<div class="row" style="align-items:flex-start">
+  const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+  const left = el('<div class="grow" style="min-width:0"></div>');
+  left.append(el(`<div class="row" style="align-items:flex-start">
     <h1 class="grow">${esc(p.title)}</h1>${statusPill(p.status)}
   </div>`));
-  head.append(el(`<div class="meta">
+  left.append(el(`<div class="meta">
     <div class="tag">📍 ${esc(p.location_text)}</div>
     <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
     <div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>
     <div class="tag">👥 ${esc(p.checked_in_count)} on site</div>
   </div>`));
   if (p.my_hours_here > 0 && !p.is_over) {
-    head.append(el(`<div class="muted small">You've logged ${esc(p.my_hours_here)} hours here.</div>`));
+    left.append(el(`<div class="muted small">You've logged ${esc(p.my_hours_here)} hours here.</div>`));
   }
+  top.append(left);
+  const actCell = el('<div class="action-cell"></div>');
+  actCell.append(actionEl(p, () => { refreshMe(); refresh(); }));
+  top.append(actCell);
+  head.append(top);
   root.append(head);
-
-  // Primary action — one action reflecting the RSVP / check-in state machine.
-  root.append(primaryActionBlock(id, p));
 
   // Leader actions
   if (p.am_leader) {
@@ -231,60 +308,6 @@ export async function detailView(id) {
 
   mount(root);
   if (p.am_leader) fillWhosComing(id, whoWrap, whoLabel);
-}
-
-// The single primary action reflecting is_over / participation / rsvp state.
-function primaryActionBlock(id, p) {
-  const block = el('<section class="card stack"></section>');
-
-  // Over: no action — a thank-you (with hours) or a plain ended banner.
-  if (p.is_over) {
-    block.append(el(p.my_hours_here > 0
-      ? `<div class="banner info">🎉 Thanks for volunteering — you logged ${esc(p.my_hours_here)} hours here.</div>`
-      : '<div class="banner">This event has ended.</div>'));
-    return block;
-  }
-
-  // Checked in: offer Check out.
-  if (p.my_open_participation) {
-    block.append(el(`<div class="banner info">✅ You're checked in${p.my_open_participation.checked_in_at ? ` since ${esc(fmtDateTime(p.my_open_participation.checked_in_at))}` : ''}.</div>`));
-    const btn = el('<button class="act primary block">Check out</button>');
-    btn.onclick = async () => {
-      btn.disabled = true;
-      try {
-        const row = await api(`/participations/${p.my_open_participation.id}/checkout`, { method: 'POST' });
-        const n = row && row.tokens_awarded != null ? row.tokens_awarded : 0;
-        toast(n > 0 ? `🎉 ＋${n} tokens` : 'Checked out — thanks!');
-        await refreshMe();
-        refresh();
-      } catch (e) { btn.disabled = false; toastErr(e); }
-    };
-    block.append(btn);
-    return block;
-  }
-
-  // RSVP'd (not yet on site): offer Check in.
-  if (p.my_rsvp) {
-    block.append(el("<div class=\"muted\">✓ You're RSVP'd</div>"));
-    const btn = el('<button class="act primary block">Check in</button>');
-    btn.onclick = async () => {
-      btn.disabled = true;
-      try { await api(`/projects/${id}/checkin`, { method: 'POST' }); refresh(); }
-      catch (e) { btn.disabled = false; toastErr(e); }
-    };
-    block.append(btn);
-    return block;
-  }
-
-  // Nothing yet: offer RSVP.
-  const btn = el('<button class="act primary block">RSVP</button>');
-  btn.onclick = async () => {
-    btn.disabled = true;
-    try { await api(`/projects/${id}/rsvp`, { method: 'POST' }); refresh(); }
-    catch (e) { btn.disabled = false; toastErr(e); }
-  };
-  block.append(btn);
-  return block;
 }
 
 // Load the RSVP roster into the organizer's "Who's coming" section.

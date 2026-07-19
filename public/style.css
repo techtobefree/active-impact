@@ -119,6 +119,10 @@ button:disabled { opacity: .5; cursor: default; }
 .act.del { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
 .act.block { width: 100%; }
 .act.big { padding: .8rem 1rem; font-size: 1.05rem; }
+/* Compact action to the right of project details (detail head + list cards).
+   The details column shrinks (.grow/min-width:0); the action stays put. */
+.action-cell { flex: none; display: flex; align-items: center; }
+.action-cell .act { white-space: nowrap; }
 
 /* ---- forms ---- */
 label { display: block; font-size: .85rem; font-weight: 600; color: var(--muted); margin: .5rem 0 .2rem; }
