@@ -94,3 +94,20 @@ def test_patch_catalog_null_field_is_noop_not_500(register):
     r = client.patch(f"/api/catalog/{item['id']}", json={"title": None})
     assert r.status_code == 200
     assert r.json()["title"] == "Original"
+
+
+def test_i2_ledger_written_only_by_tokens_module():
+    """I2 (structural): only app/tokens.py may write token_entries or users.balance."""
+    import pathlib
+
+    app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+    offenders = []
+    for f in sorted(app_dir.glob("*.py")):
+        if f.name == "tokens.py":
+            continue
+        src = f.read_text().lower()
+        if "insert into token_entries" in src:
+            offenders.append(f"{f.name}: inserts token_entries")
+        if "set balance" in src:  # e.g. "UPDATE users SET balance = balance + ..."
+            offenders.append(f"{f.name}: writes users.balance")
+    assert not offenders, offenders
