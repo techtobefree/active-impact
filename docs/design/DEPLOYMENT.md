@@ -2,9 +2,41 @@
 
 > Copies the reference app's proven, deliberately minimal topology (D17): three
 > containers, two compose files, a 5-line Caddyfile, tarball-over-SSH deploys,
-> and a **two-knob `.env`**. Plus three cheap additions it lacked: app
-> healthcheck, log rotation, backup script. The § Runbook is the exact
-> given-a-URL path to live.
+> and a small `.env`. Plus app healthcheck, log rotation, backup script.
+
+## The deploy command — `./deploy.sh` ("update the web")
+
+One command, run from the repo root, deploys the current tree to the server:
+
+```bash
+./deploy.sh          # ships code + .env, rebuilds the prod stack, health + smoke
+```
+
+It reads **`.env`** (gitignored — never committed):
+
+```bash
+SITE_ADDRESS=:80                       # ":80" = HTTP on the server IP;
+                                       # "shadow.my, www.shadow.my" = auto-HTTPS
+POSTGRES_PASSWORD=<set once, keep stable>
+DEPLOY_HOST=root@192.241.130.180       # the droplet
+```
+
+**Two-address model.** `SITE_ADDRESS=:80` serves plain HTTP on the droplet's IP —
+used while a domain's DNS isn't pointing at the box yet. Once the domain's A
+records resolve to the droplet, set `SITE_ADDRESS=shadow.my, www.shadow.my` and
+re-run `./deploy.sh`; Caddy then obtains and auto-renews Let's Encrypt certs.
+(Prereqs for the domain: DNS A records → droplet IP, ports 80/443 open. Verify
+with `curl https://cloudflare-dns.com/dns-query?name=<domain>&type=A -H accept:application/dns-json`.)
+
+**Current live staging:** `http://192.241.130.180` (SITE_ADDRESS=:80). The droplet
+was prepped with a 2 GB swapfile (it's a 512 MB box) + Docker via get.docker.com.
+
+**Workflow:** "update local" (redeploy the local `:3032` uvicorn) happens on every
+change; "update the web" runs `./deploy.sh`. Both are idempotent.
+
+---
+
+## Files (reference)
 
 ## Files
 
