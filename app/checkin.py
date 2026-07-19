@@ -132,4 +132,6 @@ def checkout(participation_id: int, user: dict = Depends(current_user)):
                 "expected_minutes": part["expected_minutes"],
             },
         )
+    if row is None:
+        raise api_error(409, "already_checked_out")
     return row

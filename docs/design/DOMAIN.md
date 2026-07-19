@@ -291,7 +291,7 @@ volunteers (flat rate is intent).
 | I1 | `users.balance` = Σ entries in − Σ entries out for every user, always ≥ 0 |
 | I2 | `token_entries` is append-only: no UPDATE/DELETE code path exists — asserted by a static source check that only `app/tokens.py` writes the table (BUILD_PLAN M4) |
 | I3 | At most one open participation per (project, user) — enforced by partial unique index |
-| I4 | `minutes` and `tokens_awarded` are both set iff `checked_out_at` is set |
+| I4 | `minutes`/`tokens_awarded` are set exactly once, **atomically** with `checked_out_at` — the checkout UPDATE is guarded `… WHERE checked_out_at IS NULL`, so concurrent checkouts (double-tap / self-vs-leader / checkout-vs-close) mint once, never twice |
 | I5 | Waiver rows are never mutated; a text edit inserts version n+1 |
 | I6 | Every participation's `waiver_id` belongs to its `project_id` |
 | I7 | Claims only transition `pending → accepted/declined` (by poster) or `pending → canceled` (by claimant); `decided_at` stamped exactly then |

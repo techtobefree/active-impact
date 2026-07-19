@@ -40,10 +40,18 @@ export async function api(path, opts = {}) {
     throw { offline: true, detail: 'offline' };
   }
   if (res.status === 401) {
-    clearSession();
-    stashReturn();
-    if (location.hash !== '#/login') location.hash = '#/login';
-    throw { status: 401, detail: 'unauthorized' };
+    // A 401 WITH a bearer token = the session expired: clear it, stash the route,
+    // and bounce to login. A 401 WITHOUT a token is a form error (e.g. a wrong
+    // password on /auth/login) — surface the server's detail to the form instead.
+    if (tok) {
+      clearSession();
+      stashReturn();
+      if (location.hash !== '#/login') location.hash = '#/login';
+      throw { status: 401, detail: 'unauthorized' };
+    }
+    let detail = 'unauthorized';
+    try { const d = await res.json(); if (d && d.detail) detail = d.detail; } catch { /* keep default */ }
+    throw { status: 401, detail };
   }
   if (res.status === 204) return null;
   const ct = res.headers.get('content-type') || '';

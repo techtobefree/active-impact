@@ -211,6 +211,8 @@ def update_catalog(
         raise api_error(403, "not_yours")
 
     data = body.model_dump(exclude_unset=True)
+    # Drop explicit nulls for NOT NULL columns so {"title": null} is a no-op, not a 500.
+    data = {k: v for k, v in data.items() if not (k in ("title", "description", "status") and v is None)}
     # Guard the item's kind/price invariant so a bad edit can't hit the DB CHECK.
     if "price_tokens" in data:
         if row["kind"] == "need" and data["price_tokens"] is not None:

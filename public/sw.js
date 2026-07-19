@@ -1,7 +1,7 @@
 // Minimal service worker: makes Active Impact installable and shell-cached so it
 // opens offline. API calls are network-first (fall back to nothing offline).
 // !! Bump SHELL on ANY change to a file in public/ (else clients keep the old shell).
-const SHELL = 'impact-shell-v3';
+const SHELL = 'impact-shell-v4';
 const ASSETS = [
   '/', '/index.html', '/style.css', '/app.js', '/api.js', '/ui.js',
   '/views/auth.js', '/views/projects.js', '/views/checkin.js',

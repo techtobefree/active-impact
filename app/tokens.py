@@ -68,21 +68,29 @@ def transfer(c, from_user_id: int, to_user_id: int, amount: int, kind: str,
     ).fetchone()
 
 
-def do_checkout(c, participation: dict) -> dict:
+def do_checkout(c, participation: dict) -> dict | None:
     """Close an OPEN participation and mint its tokens, in the caller's tx.
 
     ``participation`` must carry: id, user_id, checked_in_at, expected_minutes.
-    Used by the checkout endpoint and by project close.
+    Returns the updated row, or None if it was already checked out by a racing
+    request (the guarded UPDATE matched no row). Used by the checkout endpoint
+    and by project close.
     """
     now = c.execute("SELECT now() AS now").fetchone()["now"]
     seconds = (now - participation["checked_in_at"]).total_seconds()
     minutes = elapsed_minutes(seconds)
     tokens = tokens_for(minutes, participation["expected_minutes"])
+    # Atomic transition: only the request that flips checked_out_at from NULL
+    # mints. Without the `AND checked_out_at IS NULL` guard, a double-tap,
+    # self-vs-leader, or checkout-vs-close race would each mint again for one
+    # participation (free money; violates I4 / "tokens set once at checkout").
     row = c.execute(
         "UPDATE participations SET checked_out_at = %s, minutes = %s, tokens_awarded = %s "
-        "WHERE id = %s RETURNING *",
+        "WHERE id = %s AND checked_out_at IS NULL RETURNING *",
         (now, minutes, tokens, participation["id"]),
     ).fetchone()
+    if row is None:
+        return None  # already checked out by a concurrent request
     if tokens > 0:
         mint(c, participation["user_id"], tokens, participation_id=participation["id"])
     return row
@@ -144,6 +152,10 @@ def tip(body: TipIn, user: dict = Depends(current_user)):
         raise api_error(404, "user_not_found")
     if to["id"] == user["id"]:
         raise api_error(409, "cannot_tip_self")
+    if body.catalog_item_id is not None and not db.query_one(
+        "SELECT 1 FROM catalog_items WHERE id = %s", (body.catalog_item_id,)
+    ):
+        raise api_error(404, "not_found")
     with db.tx() as c:
         entry = transfer(
             c, user["id"], to["id"], body.amount, "tip",
