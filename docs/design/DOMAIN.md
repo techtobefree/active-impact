@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS catalog_items (
   title        TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',      -- coupon terms, contact info, etc. live here
   price_tokens INTEGER CHECK (price_tokens >= 0),  -- offers: required (0 = free); needs: NULL
-  quantity     INTEGER CHECK (quantity > 0),  -- NULL = unlimited; auto-close at 0
+  quantity     INTEGER CHECK (quantity >= 0),  -- NULL = unlimited; reaches 0 -> auto-closed
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
