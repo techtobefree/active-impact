@@ -26,7 +26,12 @@ def _ensure_test_db() -> None:
             "SELECT 1 FROM pg_database WHERE datname=%s", (dbname,)
         ).fetchone()
         if not exists:
-            conn.execute(f'CREATE DATABASE "{dbname}"')
+            # Force UTF-8 (matches the postgres:16-alpine prod image) regardless of
+            # the cluster's default encoding, so text columns decode to str.
+            conn.execute(
+                f'CREATE DATABASE "{dbname}" TEMPLATE template0 '
+                "ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'"
+            )
 
 
 _ensure_test_db()

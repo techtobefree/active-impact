@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import db
+from app.tokens import InsufficientBalance
 from app.auth import router as auth_router
 from app.users import router as users_router
 from app.projects import router as projects_router
@@ -24,6 +25,13 @@ from app.images import router as images_router
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 
 app = FastAPI(title="Active Impact")
+
+
+@app.exception_handler(InsufficientBalance)
+async def _insufficient_balance(request, exc):
+    """The ledger's overdraft guard surfaces uniformly as 409."""
+    return JSONResponse({"detail": "insufficient_balance"}, status_code=409)
+
 
 api = APIRouter(prefix="/api")
 
