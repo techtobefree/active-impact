@@ -4,14 +4,29 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#2e7d5b" />
+  <meta name="description" content="Local service projects, impact tokens, and a catalog of needs and offers." />
   <title>Active Impact</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <main id="view">
-    <p class="muted" style="text-align:center;padding:3rem 1rem">Active Impact — scaffold booting…</p>
-  </main>
+  <header id="topbar" class="hidden">
+    <a href="#/" class="brand">🌱 Active Impact</a>
+    <span class="spacer"></span>
+    <a href="#/wallet" id="balance" class="balance">🪙 0</a>
+  </header>
+
+  <main id="view"><div class="spinner">Loading…</div></main>
+
+  <nav id="nav" class="hidden">
+    <a href="#/" data-tab="projects"><span class="ico">🌱</span>Projects</a>
+    <a href="#/catalog" data-tab="catalog"><span class="ico">🎁</span>Catalog</a>
+    <a href="#/wallet" data-tab="wallet"><span class="ico">🪙</span>Wallet</a>
+    <a href="#/me" data-tab="me"><span class="ico">👤</span>Me</a>
+  </nav>
+
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
