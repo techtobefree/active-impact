@@ -1,0 +1,21 @@
+/* Active Impact -- minimal M0 tokens; full stylesheet lands in the frontend phase. */
+:root {
+  --bg: #f6f7f5;
+  --card: #ffffff;
+  --ink: #20241f;
+  --muted: #6b7280;
+  --green: #2e7d5b;
+  --amber: #b8860b;
+  --red: #b4452f;
+  --line: #e3e6e1;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.5 system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+main { max-width: 640px; margin: 0 auto; }
+.muted { color: var(--muted); }

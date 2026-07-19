@@ -1,0 +1,6 @@
+# Active Impact runtime dependencies (installed into the app image).
+fastapi
+uvicorn[standard]
+psycopg[binary,pool]
+bcrypt
+qrcode

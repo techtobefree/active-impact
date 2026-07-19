@@ -1,0 +1,7 @@
+# Caddy reverse proxy with automatic HTTPS.
+# SITE_ADDRESS is your domain (e.g. impact.example.org) -- Caddy fetches and
+# auto-renews a Let's Encrypt cert for it. Use ":80" for local/no-TLS testing.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy app:8000
+}

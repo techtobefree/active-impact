@@ -1,0 +1,12 @@
+{
+  "name": "Active Impact",
+  "short_name": "Impact",
+  "description": "Local service projects, impact tokens, and a catalog of needs and offers.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f7f5",
+  "theme_color": "#2e7d5b",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
