@@ -90,6 +90,12 @@ const ERRORS = {
 export function errMessage(e) {
   if (e && e.offline) return ERRORS.offline;
   const d = e && e.detail;
+  // FastAPI 422 returns detail as an array of field errors — surface the first
+  // one's message (e.g. "password must be 8-72 characters") instead of a generic.
+  if (Array.isArray(d)) {
+    const msg = d[0] && d[0].msg ? String(d[0].msg).replace(/^value error,\s*/i, '') : '';
+    return msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : 'Please check the form and try again.';
+  }
   return (d && ERRORS[d]) || 'Something went wrong. Please try again.';
 }
 

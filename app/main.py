@@ -24,6 +24,22 @@ from app.images import router as images_router
 
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 
+
+class NoCacheStatic(StaticFiles):
+    """Static files that must be revalidated on every load.
+
+    The PWA's own service worker handles offline/perf caching (cache-first, bumped
+    by version). At the HTTP layer we send `Cache-Control: no-cache` so browsers
+    always revalidate and pick up new app code immediately after a deploy — no
+    stale bundle when the service worker isn't active (first visit / dev / update).
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 app = FastAPI(title="Active Impact")
 
 
@@ -60,4 +76,4 @@ app.include_router(api)
 
 # The PWA. html=True serves index.html at /. Hash routing means the browser only
 # ever requests / from the server, so no SPA fallback route is needed.
-app.mount("/", StaticFiles(directory=str(PUBLIC), html=True), name="static")
+app.mount("/", NoCacheStatic(directory=str(PUBLIC), html=True), name="static")
