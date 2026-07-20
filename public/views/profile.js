@@ -115,6 +115,19 @@ export async function meView() {
     install.onclick = () => doInstall();
     actions.append(install);
   }
+  // Appearance: light/white is the default; dark is an opt-in toggle.
+  const themeRow = el('<div class="row"><span class="grow">Dark mode</span></div>');
+  const themeSwitch = el('<label class="switch" title="Toggle dark mode"></label>');
+  const themeCb = el('<input type="checkbox">');
+  themeCb.checked = localStorage.getItem('ai_theme') === 'dark';
+  themeSwitch.append(themeCb, el('<span class="slider"></span>'));
+  themeCb.onchange = () => {
+    if (themeCb.checked) { localStorage.setItem('ai_theme', 'dark'); document.documentElement.dataset.theme = 'dark'; }
+    else { localStorage.setItem('ai_theme', 'light'); delete document.documentElement.dataset.theme; }
+  };
+  themeRow.append(themeSwitch);
+  actions.append(themeRow);
+
   const out = el('<button class="act del block">Sign out</button>');
   out.onclick = async () => {
     out.disabled = true;

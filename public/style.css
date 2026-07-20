@@ -1,6 +1,7 @@
 /* Active Impact — design system. No build step; one accent + clean spacing do the
-   "inviting" work. Theme-aware via prefers-color-scheme. */
+   "inviting" work. Light/white is the DEFAULT; dark is an opt-in toggle (Me → Dark mode). */
 :root {
+  color-scheme: light;
   --bg: #f6f7f5;
   --card: #ffffff;
   --ink: #20241f;
@@ -13,12 +14,13 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, .05);
   --radius: 12px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #141613; --card: #1e211d; --ink: #e8eae6; --muted: #9aa39a;
-    --green: #57b083; --green-ink: #0d130f; --amber: #d8a63a; --red: #e0745c;
-    --line: #2c302b; --shadow: none;
-  }
+/* Dark is OPT-IN only, applied via a data-theme attribute set from the Me toggle.
+   The OS 'prefers-color-scheme: dark' no longer forces it — light/white is default. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141613; --card: #1e211d; --ink: #e8eae6; --muted: #9aa39a;
+  --green: #57b083; --green-ink: #0d130f; --amber: #d8a63a; --red: #e0745c;
+  --line: #2c302b; --shadow: none;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }

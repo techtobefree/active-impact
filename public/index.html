@@ -9,6 +9,11 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <script>
+    // Apply the saved theme before first paint (no flash). Default is light/white;
+    // dark is opt-in (Me → Dark mode) and is never forced by the OS setting.
+    try { if (localStorage.getItem('ai_theme') === 'dark') document.documentElement.dataset.theme = 'dark'; } catch (e) {}
+  </script>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
