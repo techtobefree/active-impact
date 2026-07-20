@@ -2,6 +2,10 @@
 
 See docs/design/DOMAIN.md § Standard read shapes. These run supplementary
 queries via the read pool; callers pass an already-fetched primary row.
+
+A project CARD now embeds one relevant EVENT (occurrence). Per-event, per-user
+action state (checked_in_count, my_rsvp, my_open_participation, my_hours_here) is
+batched by event id via ``event_state_maps`` so the feed has no N+1.
 """
 from __future__ import annotations
 
@@ -35,9 +39,11 @@ def user_public(row: dict) -> dict:
         "WHERE to_user_id=%s AND kind='earn'",
         (uid,),
     )["a"]
+    # projects_joined counts distinct PROJECTS across the events I participated in.
     joined = db.query_one(
-        "SELECT COUNT(DISTINCT project_id) AS c FROM participations "
-        "WHERE user_id=%s AND checked_out_at IS NOT NULL",
+        "SELECT COUNT(DISTINCT e.project_id) AS c FROM participations p "
+        "JOIN events e ON e.id = p.event_id "
+        "WHERE p.user_id=%s AND p.checked_out_at IS NOT NULL",
         (uid,),
     )["c"]
     return {
@@ -61,23 +67,140 @@ def cover_image_id(entity: str, entity_id: int) -> int | None:
     return r["id"] if r else None
 
 
-def project_card(row: dict) -> dict:
-    pid = row["id"]
-    cnt = db.query_one(
-        "SELECT COUNT(*) AS c FROM participations "
-        "WHERE project_id=%s AND checked_out_at IS NULL",
-        (pid,),
-    )["c"]
+def follower_count(project_id: int) -> int:
+    return int(
+        db.query_one(
+            "SELECT COUNT(*) AS c FROM follows WHERE project_id=%s", (project_id,)
+        )["c"]
+    )
+
+
+# ---- events (occurrences) ---------------------------------------------------
+
+def event_is_over(event: dict) -> bool:
+    """Per-EVENT: completed OR now() past starts_at + expected_minutes.
+
+    Uses the ``is_over`` column when the row was selected with it; otherwise
+    computes it with one query.
+    """
+    if "is_over" in event and event["is_over"] is not None:
+        return bool(event["is_over"])
+    r = db.query_one(
+        "SELECT (%s = 'completed' OR now() > (%s::timestamptz + "
+        "make_interval(mins => %s))) AS over",
+        (event["status"], event["starts_at"], event["expected_minutes"]),
+    )
+    return bool(r["over"])
+
+
+def event_state_maps(event_ids: list[int], user_id: int) -> dict[int, dict]:
+    """Batch per-event/per-user action state for a set of event ids (no N+1).
+
+    Returns {event_id: {checked_in_count, my_rsvp, my_open_participation,
+    my_hours_here}} -- exactly the fields event_card overlays onto an event row.
+    """
+    if not event_ids:
+        return {}
+    count_map = {
+        r["event_id"]: r["c"]
+        for r in db.query(
+            "SELECT event_id, COUNT(*) AS c FROM participations "
+            "WHERE event_id = ANY(%s) AND checked_out_at IS NULL GROUP BY event_id",
+            (event_ids,),
+        )
+    }
+    rsvp_map = {
+        r["event_id"]: {"is_leader": r["is_leader"]}
+        for r in db.query(
+            "SELECT event_id, is_leader FROM rsvps "
+            "WHERE user_id=%s AND event_id = ANY(%s)",
+            (user_id, event_ids),
+        )
+    }
+    open_map = {
+        r["event_id"]: {"id": r["id"], "checked_in_at": r["checked_in_at"]}
+        for r in db.query(
+            "SELECT DISTINCT ON (event_id) event_id, id, checked_in_at "
+            "FROM participations "
+            "WHERE user_id=%s AND checked_out_at IS NULL AND event_id = ANY(%s) "
+            "ORDER BY event_id",
+            (user_id, event_ids),
+        )
+    }
+    hours_map = {
+        r["event_id"]: r["m"]
+        for r in db.query(
+            "SELECT event_id, COALESCE(SUM(minutes),0) AS m FROM participations "
+            "WHERE user_id=%s AND checked_out_at IS NOT NULL AND event_id = ANY(%s) "
+            "GROUP BY event_id",
+            (user_id, event_ids),
+        )
+    }
+    return {
+        eid: {
+            "checked_in_count": int(count_map.get(eid, 0)),
+            "my_rsvp": rsvp_map.get(eid),
+            "my_open_participation": open_map.get(eid),
+            "my_hours_here": round(int(hours_map.get(eid, 0)) / 60, 1),
+        }
+        for eid in event_ids
+    }
+
+
+def event_state(event_id: int, user_id: int) -> dict:
+    """Single-event convenience wrapper over event_state_maps."""
+    return event_state_maps([event_id], user_id)[event_id]
+
+
+def event_card(event: dict | None, state: dict) -> dict | None:
+    """Per-EVENT read shape embedded in project cards / detail.
+
+    ``event`` is an events row (ideally selected with ``... AS is_over``);
+    ``state`` supplies checked_in_count + the my_* fields (from ``event_state`` /
+    ``event_state_maps``). Returns None for a null event (a project with none).
+    """
+    if event is None:
+        return None
+    st = state
+    return {
+        "id": event["id"],
+        "starts_at": event["starts_at"],
+        "location_text": event["location_text"],
+        "expected_minutes": event["expected_minutes"],
+        "status": event["status"],
+        "is_over": event_is_over(event),
+        "checked_in_count": int(st["checked_in_count"]),
+        "my_rsvp": st["my_rsvp"],
+        "my_open_participation": st["my_open_participation"],
+        "my_hours_here": st["my_hours_here"],
+    }
+
+
+def event_detail(event: dict | None, state: dict, am_leader: bool) -> dict | None:
+    """event_card plus the leader-only checkin_code -- the per-event detail shape.
+
+    Used inside project detail and returned by POST /projects/{id}/events and the
+    event-scoped endpoints.
+    """
+    card = event_card(event, state)
+    if card is not None and am_leader:
+        card["checkin_code"] = event["checkin_code"]
+    return card
+
+
+def project_card(project: dict, event: dict | None) -> dict:
+    """Feed card: the durable project + ONE embedded event_card (or null).
+
+    ``event`` is the already-assembled event_card dict for the relevant occurrence
+    (soonest not-over for `upcoming`, most-recent for `past`), or None.
+    """
+    pid = project["id"]
     return {
         "id": pid,
-        "title": row["title"],
-        "location_text": row["location_text"],
-        "starts_at": row["starts_at"],
-        "expected_minutes": row["expected_minutes"],
-        "status": row["status"],
+        "title": project["title"],
         "cover_image_id": cover_image_id("project", pid),
-        "checked_in_count": int(cnt),
-        "owner": user_brief(row["owner_id"]),
+        "follower_count": follower_count(pid),
+        "event": event,
     }
 
 

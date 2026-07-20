@@ -15,7 +15,10 @@ const routes = [
   [/^#\/$/, projects.listView],
   [/^#\/projects\/new$/, projects.newView],
   [/^#\/projects\/(\d+)$/, projects.detailView],
-  [/^#\/projects\/(\d+)\/lead$/, projects.leadView],
+  // Lead/QR/roster/close/who's-coming are now PER-EVENT (a project has many
+  // events). The event lead hub is keyed by event id; event detail is optional.
+  [/^#\/events\/(\d+)\/lead$/, projects.leadView],
+  [/^#\/events\/(\d+)$/, projects.eventDetailView],
   // Deliberately loose: a mangled QR/URL code must reach the check-in view's
   // friendly "invalid code" card, not silently fall through to the home screen.
   [/^#\/c\/(.+)$/, checkin.checkinView],

@@ -19,7 +19,9 @@ export async function checkinView(code) {
     return;
   }
 
-  const { project, waiver, my_open_participation } = data;
+  // The code now resolves an EVENT (occurrence): its project card, that event's
+  // schedule, the project's current waiver, and my open participation (if any).
+  const { event, project, waiver, my_open_participation } = data;
   const action = el('<div class="card stack center"></div>');
   if (my_open_participation) {
     renderCheckedIn(action, project, my_open_participation.id, my_open_participation.checked_in_at);
@@ -27,18 +29,19 @@ export async function checkinView(code) {
     renderAgree(action, code, project);
   }
   const root = el('<div class="stack"></div>');
-  root.append(summaryCard(project), waiverBox(waiver), action);
+  root.append(summaryCard(project, event), waiverBox(waiver), action);
   mount(root);
 }
 
 // ---- pieces ----------------------------------------------------------------
 
-function summaryCard(p) {
+// Project title + THIS event's schedule (location/date/duration live on the event now).
+function summaryCard(project, event) {
   const c = el('<div class="card stack"></div>');
-  c.append(el(`<h2>${esc(p.title)}</h2>`));
-  if (p.location_text) c.append(el(`<div class="tag">📍 ${esc(p.location_text)}</div>`));
-  if (p.starts_at) c.append(el(`<div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>`));
-  if (p.expected_minutes != null) c.append(el(`<div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))} expected</div>`));
+  c.append(el(`<h2>${esc(project.title)}</h2>`));
+  if (event && event.location_text) c.append(el(`<div class="tag">📍 ${esc(event.location_text)}</div>`));
+  if (event && event.starts_at) c.append(el(`<div class="tag">🗓 ${esc(fmtDateTime(event.starts_at))}</div>`));
+  if (event && event.expected_minutes != null) c.append(el(`<div class="tag">⏱ ${esc(fmtDuration(event.expected_minutes))} expected</div>`));
   return c;
 }
 

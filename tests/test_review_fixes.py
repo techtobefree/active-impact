@@ -14,24 +14,28 @@ def _balance(uid):
 
 
 def _open_participation(user_id, minutes_ago, expected_minutes=90, code="rev-code"):
-    """A backdated OPEN participation (+ its project/waiver) via direct SQL."""
+    """A backdated OPEN participation (+ its project/event/waiver) via direct SQL."""
     with db.tx() as c:
         pr = c.execute(
-            "INSERT INTO projects(owner_id,title,location_text,starts_at,expected_minutes,checkin_code) "
-            "VALUES (%s,'P','L',now(),%s,%s) RETURNING id",
-            (user_id, expected_minutes, code),
+            "INSERT INTO projects(owner_id,title) VALUES (%s,'P') RETURNING id",
+            (user_id,),
+        ).fetchone()
+        ev = c.execute(
+            "INSERT INTO events(project_id,starts_at,expected_minutes,location_text,checkin_code) "
+            "VALUES (%s, now(), %s, 'L', %s) RETURNING id",
+            (pr["id"], expected_minutes, code),
         ).fetchone()
         w = c.execute(
             "INSERT INTO waivers(project_id,version,text) VALUES (%s,1,'w') RETURNING id",
             (pr["id"],),
         ).fetchone()
         part = c.execute(
-            "INSERT INTO participations(project_id,user_id,waiver_id,checked_in_at) "
+            "INSERT INTO participations(event_id,user_id,waiver_id,checked_in_at) "
             "VALUES (%s,%s,%s, now() - make_interval(mins => %s)) RETURNING id, checked_in_at",
-            (pr["id"], user_id, w["id"], minutes_ago),
+            (ev["id"], user_id, w["id"], minutes_ago),
         ).fetchone()
-    return {"id": part["id"], "user_id": user_id,
-            "checked_in_at": part["checked_in_at"], "expected_minutes": expected_minutes}
+    return {"id": part["id"], "user_id": user_id, "checked_in_at": part["checked_in_at"],
+            "expected_minutes": expected_minutes, "event_id": ev["id"], "project_id": pr["id"]}
 
 
 def test_double_checkout_does_not_double_mint(register):

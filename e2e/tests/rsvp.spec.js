@@ -9,8 +9,9 @@ function dtLocal(days) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// POST /projects seeds the project AND its FIRST event, then lands on the detail.
 async function createProject(page, title, startsLocal) {
-  await page.getByRole('link', { name: /new project/i }).click();
+  await page.getByRole('link', { name: /new service project/i }).click();
   await page.locator('input[name=title]').fill(title);
   await page.locator('input[name=location_text]').fill('Riverside Park');
   await page.locator('input[name=starts_at]').fill(startsLocal);
@@ -25,33 +26,25 @@ const PNG_1x1 = Buffer.from(
 );
 
 test.describe('RSVP flow', () => {
-  test('RSVP → check in → check out → back to check in, plus organizer leader toggle', async ({ page }, testInfo) => {
+  test('RSVP → check in → check out → back to check in, plus the event-leader toggle', async ({ page }, testInfo) => {
     await registerUI(page, uemail('rsvp'), 'password123', 'RSVP Organizer');
-    await createProject(page, 'E2E RSVP Cleanup', dtLocal(7)); // future → live, never "over"
+    await createProject(page, 'E2E RSVP Cleanup ' + uname(), dtLocal(7)); // future → live, never "over"
 
-    // Nothing yet → the action is RSVP.
+    // The action now lives on the event row in the detail's Events section.
+    // Nothing yet → RSVP.
     const rsvp = page.getByRole('button', { name: /^rsvp$/i });
     await expect(rsvp).toBeVisible();
     await shot(page, testInfo, 'rsvp-available');
     await rsvp.click();
 
-    // RSVP'd → "Check in" (the action sits to the right of the details) + you
-    // appear in Who's coming.
+    // RSVP'd → "Check in" (self-service, no QR).
     const checkin = page.getByRole('button', { name: /^check in$/i });
     await expect(checkin).toBeVisible();
-    await expect(page.getByText(/Who's coming \(1\)/i)).toBeVisible();
-    await shot(page, testInfo, 'rsvpd-whos-coming');
+    await shot(page, testInfo, 'rsvpd');
     await expectNoGenericError(page);
 
-    // Organizer designates themselves an event leader — the flag must persist a reload.
-    await page.locator('.switch').first().click();
-    await expect(page.locator('.switch input[type=checkbox]').first()).toBeChecked();
-    await shot(page, testInfo, 'leader-on');
-    await page.reload();
-    await expect(page.locator('.switch input[type=checkbox]').first()).toBeChecked();
-
-    // Check in (self-service, no QR) → "Check out".
-    await page.getByRole('button', { name: /^check in$/i }).click();
+    // Check in → "Check out".
+    await checkin.click();
     const checkout = page.getByRole('button', { name: /^check out$/i });
     await expect(checkout).toBeVisible();
     await shot(page, testInfo, 'checked-in');
@@ -62,54 +55,94 @@ test.describe('RSVP flow', () => {
     await expect(page.getByRole('button', { name: /^check in$/i })).toBeVisible();
     await shot(page, testInfo, 'back-to-check-in');
     await expectNoGenericError(page);
+
+    // "Who's coming" + the event-leader toggle are now on the EVENT lead hub
+    // (per event), reached from the event row's Manage link.
+    await page.getByRole('link', { name: /^manage$/i }).click();
+    await expect(page).toHaveURL(/#\/events\/\d+\/lead$/);
+    await expect(page.getByText(/Who's coming \(1\)/i)).toBeVisible();
+    await shot(page, testInfo, 'whos-coming');
+
+    // Organizer designates themselves an event leader — the flag persists a reload.
+    await page.locator('.switch').first().click();
+    await expect(page.locator('.switch input[type=checkbox]').first()).toBeChecked();
+    await shot(page, testInfo, 'leader-on');
+    await page.reload();
+    await expect(page.locator('.switch input[type=checkbox]').first()).toBeChecked();
+    await shot(page, testInfo, 'leader-persists');
+    await expectNoGenericError(page);
   });
 
-  test('act on a project straight from the events list', async ({ page }, testInfo) => {
+  test('act on an event straight from the feed card', async ({ page }, testInfo) => {
     await registerUI(page, uemail('feed'), 'password123', 'Feed Volunteer');
     const title = 'E2E Feed Action ' + uname(); // unique so the feed card is unambiguous across runs
     await createProject(page, title, dtLocal(7)); // future → live, never "over"
 
-    // Back to the events list (Upcoming).
+    // Back to the feed (Upcoming).
     await page.goto('/#/');
     await expect(page).toHaveURL(/#\/$/);
 
-    // Find the card and RSVP straight from the feed.
+    // Find the card and RSVP straight from the feed (its embedded event action).
     const card = page.locator('a.card', { hasText: title });
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: /^rsvp$/i }).click();
 
-    // The button must act in place: URL is STILL the list (did not open the
+    // The button must act in place: URL is STILL the feed (did not open the
     // detail), and the card's button now reads "Check in".
     await expect(page).toHaveURL(/#\/$/);
     await expect(card.getByRole('button', { name: /^check in$/i })).toBeVisible();
-    await shot(page, testInfo, 'list-rsvpd');
+    await shot(page, testInfo, 'feed-rsvpd');
     await expectNoGenericError(page);
 
-    // Check in from the feed → "Check out", still without leaving the list.
+    // Check in from the feed → "Check out", still without leaving the feed.
     await card.getByRole('button', { name: /^check in$/i }).click();
     await expect(page).toHaveURL(/#\/$/);
     await expect(card.getByRole('button', { name: /^check out$/i })).toBeVisible();
-    await shot(page, testInfo, 'list-checked-in');
+    await shot(page, testInfo, 'feed-checked-in');
     await expectNoGenericError(page);
   });
 
-  test('an ended event offers no action — just an ended banner', async ({ page }, testInfo) => {
+  test('a leader can add a second event; both appear on the project detail', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('addevt'), 'password123', 'Multi Event Organizer');
+    const title = 'E2E Multi Event ' + uname();
+    await createProject(page, title, dtLocal(7)); // seeds the first event
+
+    // The detail lists exactly one event so far (each event row has a Manage link).
+    await expect(page.getByText(/^Events$/)).toBeVisible();
+    await expect(page.getByRole('link', { name: /^manage$/i })).toHaveCount(1);
+    await shot(page, testInfo, 'one-event');
+
+    // Open the "＋ Add event" form and schedule a second occurrence.
+    await page.getByRole('button', { name: /add event/i }).click();
+    await page.locator('input[name=location_text]').fill('North Gate');
+    await page.locator('input[name=starts_at]').fill(dtLocal(14));
+    await page.locator('form.add').getByRole('button', { name: /add event/i }).click();
+
+    // Both events now appear (two Manage links) and the new location is listed.
+    await expect(page.getByRole('link', { name: /^manage$/i })).toHaveCount(2);
+    await expect(page.getByText(/North Gate/)).toBeVisible();
+    await shot(page, testInfo, 'two-events');
+    await expectNoGenericError(page);
+  });
+
+  test('an ended event offers no action — just an ended chip', async ({ page }, testInfo) => {
     await registerUI(page, uemail('over'), 'password123', 'Past Organizer');
-    // The create form warns on past dates, so seed a already-ended project via the API.
-    const id = await page.evaluate(async () => {
+    const title = 'E2E Ended Event ' + uname();
+    // The create form warns on past dates, so seed an already-ended event via the API.
+    const id = await page.evaluate(async (t) => {
       const token = localStorage.getItem('ai_token');
       const startsAt = new Date(Date.now() - 4 * 3600e3).toISOString();
       const r = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-        body: JSON.stringify({ title: 'E2E Ended Event', location_text: 'Old Hall', starts_at: startsAt, expected_minutes: 60 }),
+        body: JSON.stringify({ title: t, location_text: 'Old Hall', starts_at: startsAt, expected_minutes: 60 }),
       });
       return (await r.json()).id;
-    });
+    }, title);
 
     await page.goto('/#/projects/' + id);
-    await expect(page.getByRole('heading', { name: 'E2E Ended Event' })).toBeVisible();
-    // Over → no button, just an "Ended" chip to the right of the details.
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    // Over → no button on the event row, just an "Ended" chip.
     await expect(page.getByText(/^Ended$/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /^rsvp$/i })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^check in$/i })).toHaveCount(0);
@@ -170,9 +203,9 @@ test.describe('RSVP flow', () => {
     await expectNoGenericError(page);
   });
 
-  test('event images: first upload becomes the cover, and the cover can be switched', async ({ page }, testInfo) => {
+  test('project images: first upload becomes the cover, and the cover can be switched', async ({ page }, testInfo) => {
     await registerUI(page, uemail('img'), 'password123', 'Photo Organizer');
-    await createProject(page, 'E2E Photo Project', dtLocal(7));
+    await createProject(page, 'E2E Photo Project ' + uname(), dtLocal(7));
 
     const fileInput = page.locator('input[type=file]');
 

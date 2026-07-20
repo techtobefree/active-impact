@@ -1,5 +1,7 @@
-// Projects: list (Upcoming/Past/Mine + search), detail (+ checkout/edit),
-// create, and the leader hub (QR, roster, leaders, close).
+// Service projects: list (Upcoming/Past/Mine + search), detail (durable project
+// + its events), create (project + first event), and the per-EVENT lead hub
+// (QR, roster, who's-coming, close). A project has many events (occurrences);
+// per-user RSVP/check-in/check-out state now lives on the embedded event.
 import { api, apiBlobURL } from '../api.js';
 import {
   el, esc, mount, clear, addForm, avatarEl, statusPill, emptyState, spinner,
@@ -21,52 +23,54 @@ function errScreen(e) {
   mount(card);
 }
 
-// ISO -> value for <input type="datetime-local"> in the viewer's local time.
-function toLocalInput(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+// The 📍/🗓/⏱/👥 meta block for one EVENT (occurrence).
+function eventMeta(ev) {
+  return el(`<div class="meta">
+    <div class="tag">📍 ${esc(ev.location_text)}</div>
+    <div class="tag">🗓 ${esc(fmtDateTime(ev.starts_at))}</div>
+    <div class="tag">⏱ ${esc(fmtDuration(ev.expected_minutes))}</div>
+    <div class="tag">👥 ${esc(ev.checked_in_count)} checked in</div>
+  </div>`);
 }
 
-// A compact action node reflecting the is_over / participation / rsvp state
-// machine — shared by the detail head and every list card. Returns ONE node.
-// `onDone(p.id)` fires after a successful action so the caller can refresh in
-// place. `stopNav` swallows the click so a button living inside a list card's
-// <a> never navigates into the detail.
-function actionEl(p, onDone, { stopNav = false } = {}) {
+// A compact action node reflecting one EVENT's is_over / participation / rsvp
+// state machine — shared by the feed card, the detail's event rows, and the
+// event detail head. Returns ONE node. `onDone()` fires after a successful
+// action so the caller can refresh in place. `stopNav` swallows the click so a
+// button living inside a card's <a> never navigates into the detail.
+function actionEl(evt, onDone, { stopNav = false } = {}) {
   const guard = (e) => { if (stopNav) { e.preventDefault(); e.stopPropagation(); } };
 
   // Over: no action — a thank-you chip (with hours) or a plain "Ended" chip.
-  if (p.is_over) {
-    return el(p.my_hours_here > 0
-      ? `<span class="pill green">🎉 ${esc(p.my_hours_here)}h</span>`
+  if (evt.is_over) {
+    return el(evt.my_hours_here > 0
+      ? `<span class="pill green">🎉 ${esc(evt.my_hours_here)}h</span>`
       : '<span class="pill muted">Ended</span>');
   }
 
-  // Checked in: offer Check out.
-  if (p.my_open_participation) {
+  // Checked in: offer Check out (closes the participation, mints tokens).
+  if (evt.my_open_participation) {
     const btn = el('<button class="act primary">Check out</button>');
     btn.onclick = async (e) => {
       guard(e);
       btn.disabled = true;
       try {
-        const row = await api(`/participations/${p.my_open_participation.id}/checkout`, { method: 'POST' });
+        const row = await api(`/participations/${evt.my_open_participation.id}/checkout`, { method: 'POST' });
         const n = row && row.tokens_awarded != null ? row.tokens_awarded : 0;
         toast(n > 0 ? `🎉 ＋${n} tokens` : 'Checked out — thanks!');
-        onDone(p.id);
+        onDone();
       } catch (err) { btn.disabled = false; toastErr(err); }
     };
     return btn;
   }
 
-  // RSVP'd (not yet on site): offer Check in.
-  if (p.my_rsvp) {
+  // RSVP'd (not yet on site): offer Check in (self-service, event-scoped).
+  if (evt.my_rsvp) {
     const btn = el('<button class="act primary">Check in</button>');
     btn.onclick = async (e) => {
       guard(e);
       btn.disabled = true;
-      try { await api(`/projects/${p.id}/checkin`, { method: 'POST' }); onDone(p.id); }
+      try { await api(`/events/${evt.id}/checkin`, { method: 'POST' }); onDone(); }
       catch (err) { btn.disabled = false; toastErr(err); }
     };
     return btn;
@@ -77,15 +81,16 @@ function actionEl(p, onDone, { stopNav = false } = {}) {
   btn.onclick = async (e) => {
     guard(e);
     btn.disabled = true;
-    try { await api(`/projects/${p.id}/rsvp`, { method: 'POST' }); onDone(p.id); }
+    try { await api(`/events/${evt.id}/rsvp`, { method: 'POST' }); onDone(); }
     catch (err) { btn.disabled = false; toastErr(err); }
   };
   return btn;
 }
 
 // A project_card -> a tappable card node: cover on top, then a details-left /
-// action-right row. The button acts in place (see renderBody) so the current
-// tab and scroll are preserved, and never navigates (stopNav) despite the <a>.
+// action-right row for the embedded event. The button acts in place (re-fetches
+// GET /events/:id) so the current tab and scroll survive, and never navigates
+// (stopNav) despite the <a>. A project with no listable event shows a muted note.
 function projectCard(p) {
   const card = el(`<a class="card" href="#/projects/${p.id}" style="display:block"></a>`);
   if (p.cover_image_id) {
@@ -95,29 +100,29 @@ function projectCard(p) {
   }
   const body = el('<div></div>');
   card.append(body);
-  const renderBody = (proj) => {
+  const renderBody = (evt) => {
     clear(body);
     const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
     const details = el('<div class="grow" style="min-width:0"></div>');
-    details.append(el(`<h3 class="grow">${esc(proj.title)}</h3>`));
-    details.append(el(`<div class="meta">
-      <div class="tag">📍 ${esc(proj.location_text)}</div>
-      <div class="tag">🗓 ${esc(fmtDateTime(proj.starts_at))}</div>
-      <div class="tag">⏱ ${esc(fmtDuration(proj.expected_minutes))}</div>
-      <div class="tag">👥 ${esc(proj.checked_in_count)} checked in</div>
-    </div>`));
-    row.append(details);
-    const cell = el('<div class="action-cell"></div>');
-    cell.append(el(statusPill(proj.status)));
-    cell.append(actionEl(proj, async (id) => {
-      await refreshMe();
-      const fresh = await api('/projects/' + id);
-      renderBody(fresh);
-    }, { stopNav: true }));
-    row.append(cell);
+    details.append(el(`<h3 class="grow">${esc(p.title)}</h3>`));
+    if (evt) {
+      details.append(eventMeta(evt));
+      row.append(details);
+      const cell = el('<div class="action-cell"></div>');
+      cell.append(el(statusPill(evt.status)));
+      cell.append(actionEl(evt, async () => {
+        await refreshMe();
+        const fresh = await api('/events/' + evt.id);
+        renderBody(fresh);
+      }, { stopNav: true }));
+      row.append(cell);
+    } else {
+      details.append(el('<div class="muted small">No upcoming events</div>'));
+      row.append(details);
+    }
     body.append(row);
   };
-  renderBody(p);
+  renderBody(p.event);
   return card;
 }
 
@@ -147,7 +152,7 @@ export async function listView() {
     timer = setTimeout(() => { q = search.value.trim(); load(); }, 250);
   };
 
-  const newBtn = el('<a class="act primary block" href="#/projects/new">＋ New project</a>');
+  const newBtn = el('<a class="act primary block" href="#/projects/new">＋ New service project</a>');
 
   const emptyMsg = () => scope === 'mine'
     ? "You haven't joined or led any projects yet."
@@ -181,15 +186,15 @@ export async function newView() {
   const banner = el('<div class="banner warn">Leaving the waiver blank uses our standard template — not legal advice. Edit it to fit your project.</div>');
 
   const form = addForm({
-    title: 'New project',
+    title: 'New service project',
     submit: 'Create project',
     fields: [
       { name: 'title', label: 'Title', required: true },
       { name: 'description', label: 'Description', type: 'textarea', placeholder: 'What are you doing, and what should volunteers bring?' },
-      { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet' },
-      { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true,
+      { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet', hint: 'The first event is created here — you can add more events later.' },
+      { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true, hint: 'When the first event begins.',
         // A finger-slip on the date wheels (wrong year / AM-PM) would create a
-        // project that never shows under "Upcoming" — flag it before submit.
+        // first event that never shows under "Upcoming" — flag it before submit.
         validate: (v) => (new Date(v).getTime() < Date.now() - 12 * 3600e3
           ? 'This start time is in the past — double-check the date.' : null) },
       { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: 120, placeholder: '120' },
@@ -207,7 +212,7 @@ export async function newView() {
   mount(root);
 }
 
-// ---- detail -----------------------------------------------------------------
+// ---- detail (the durable service project) -----------------------------------
 
 export async function detailView(id) {
   mount(spinner());
@@ -222,36 +227,24 @@ export async function detailView(id) {
 
   const root = el('<div class="stack"></div>');
 
-  // Cover (primary image) — full-width at the top of the detail
+  // Cover (primary image) — full-width at the top of the detail.
   if (p.primary_image_id) {
     const cov = el('<img class="cover" alt="">');
     apiBlobURL(`/images/${p.primary_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
     root.append(cov);
   }
 
-  // Images
+  // Images strip (leaders can add/remove/set cover).
   root.append(imagesStrip('project', id, p.image_ids, { canEdit: p.am_leader, onChange: refresh, primaryId: p.primary_image_id }));
 
-  // Title + status + meta on the LEFT, the primary action on the RIGHT.
+  // Title + description.
   const head = el('<section class="card stack"></section>');
-  const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
-  const left = el('<div class="grow" style="min-width:0"></div>');
-  left.append(el(`<h1 class="grow">${esc(p.title)}</h1>`));
-  left.append(el(`<div class="meta">
-    <div class="tag">📍 ${esc(p.location_text)}</div>
-    <div class="tag">🗓 ${esc(fmtDateTime(p.starts_at))}</div>
-    <div class="tag">⏱ ${esc(fmtDuration(p.expected_minutes))}</div>
-    <div class="tag">👥 ${esc(p.checked_in_count)} on site</div>
-  </div>`));
-  if (p.my_hours_here > 0 && !p.is_over) {
-    left.append(el(`<div class="muted small">You've logged ${esc(p.my_hours_here)} hours here.</div>`));
+  head.append(el(`<h1>${esc(p.title)}</h1>`));
+  if (p.description && p.description.trim()) {
+    const body = el('<p></p>');
+    body.textContent = p.description;
+    head.append(body);
   }
-  top.append(left);
-  const actCell = el('<div class="action-cell"></div>');
-  actCell.append(el(statusPill(p.status)));
-  actCell.append(actionEl(p, () => { refreshMe(); refresh(); }));
-  top.append(actCell);
-  head.append(top);
   root.append(head);
 
   // Share / Follow / Invite — available to every signed-in viewer.
@@ -299,48 +292,57 @@ export async function detailView(id) {
   social.append(shareBtn, followBtn, inviteBtn);
   root.append(social, followers);
 
-  // Leader actions
+  // Leader: edit the durable project (title / description / waiver).
   if (p.am_leader) {
     const bar = el('<div class="row"></div>');
-    bar.append(el(`<a class="act primary grow" href="#/projects/${id}/lead">Lead screen</a>`));
-    const edit = el('<button class="act grow">Edit</button>');
+    const edit = el('<button class="act grow">Edit project</button>');
     edit.onclick = () => openEdit(id, p);
     bar.append(edit);
     root.append(bar);
   }
 
-  // Description
-  if (p.description && p.description.trim()) {
-    const desc = el('<section class="card"></section>');
-    const body = el('<p></p>');
-    body.textContent = p.description;
-    desc.append(body);
-    root.append(desc);
-  }
-
-  // Who's coming (organizer-only): everyone who RSVP'd + a per-person leader toggle.
-  let whoLabel, whoWrap;
-  if (p.am_leader) {
-    whoLabel = el("<div class=\"section-label\">Who's coming</div>");
-    whoWrap = el('<section class="card stack"></section>');
-    whoWrap.append(spinner());
-    root.append(whoLabel, whoWrap);
-  }
-
-  // Organizers (the project_leaders with real powers — distinct from event leaders)
-  if (p.leaders && p.leaders.length) {
-    root.append(el('<div class="section-label">Organizers</div>'));
-    const wrap = el('<section class="card stack"></section>');
-    for (const lead of p.leaders) {
-      const row = el('<div class="row"></div>');
-      row.append(avatarEl(lead));
-      row.append(el(`<a class="grow" href="#/u/${esc(lead.id)}">${esc(lead.display_name)}</a>`));
-      wrap.append(row);
+  // Organizers (project_leaders — project-wide powers). Leaders add/remove here.
+  root.append(el('<div class="section-label">Organizers</div>'));
+  const orgWrap = el('<section class="card stack"></section>');
+  for (const lead of p.leaders || []) {
+    const row = el('<div class="row"></div>');
+    row.append(avatarEl(lead));
+    row.append(el(`<a class="grow" href="#/u/${esc(lead.id)}">${esc(lead.display_name)}</a>`));
+    if (p.am_leader && !(p.owner && lead.id === p.owner.id)) {
+      const x = el('<button class="act del" title="Remove organizer">✕</button>');
+      x.onclick = async () => {
+        if (!confirm(`Remove ${lead.display_name} as an organizer?`)) return;
+        try {
+          await api(`/projects/${id}/leaders/${encodeURIComponent(lead.id)}`, { method: 'DELETE' });
+          toast('Organizer removed');
+          refresh();
+        } catch (e) { toastErr(e); }
+      };
+      row.append(x);
     }
-    root.append(wrap);
+    orgWrap.append(row);
   }
+  if (p.am_leader) {
+    const alForm = el('<form class="row" style="gap:.4rem"></form>');
+    const alInput = el('<input class="grow" name="email" placeholder="Add organizer by email" autocomplete="off" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false">');
+    alForm.append(alInput, el('<button class="act" type="submit">Add</button>'));
+    const alBtn = alForm.querySelector('button');
+    alForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const em = alInput.value.trim().toLowerCase();
+      if (!em || alBtn.disabled) return;
+      alBtn.disabled = true; // no double-submit race ("added" then "already a leader")
+      try {
+        await api(`/projects/${id}/leaders`, { body: { email: em } });
+        toast('Organizer added');
+        refresh();
+      } catch (ex) { toastErr(ex); } finally { alBtn.disabled = false; }
+    };
+    orgWrap.append(alForm);
+  }
+  root.append(orgWrap);
 
-  // Waiver
+  // Waiver (collapsed).
   if (p.waiver && p.waiver.text) {
     const det = el(`<details class="card"><summary>Waiver${p.waiver.version ? ` (v${esc(p.waiver.version)})` : ''}</summary></details>`);
     const wtext = el('<p class="muted small" style="white-space:pre-wrap"></p>');
@@ -349,15 +351,259 @@ export async function detailView(id) {
     root.append(det);
   }
 
+  // Events (occurrences): upcoming first, then past (server-ordered). Each row
+  // carries its own meta + status + action; leaders get a Manage link + Add event.
+  root.append(el('<div class="section-label">Events</div>'));
+  if (p.am_leader) root.append(addEventControl(id));
+  if (!p.events || !p.events.length) {
+    root.append(emptyState('No events scheduled yet.'));
+  } else {
+    for (const ev of p.events) root.append(eventRow(ev, p.am_leader));
+  }
+
   mount(root);
-  if (p.am_leader) fillWhosComing(id, whoWrap, whoLabel);
 }
 
-// Load the RSVP roster into the organizer's "Who's coming" section.
-async function fillWhosComing(id, wrap, label) {
+// One event row on the project detail: meta-left, status + action-right, and
+// (leader) a Manage link into the event lead hub. The action refreshes just this
+// row in place (re-fetch GET /events/:id) so scroll + the rest of the page survive.
+function eventRow(event, amLeader) {
+  const card = el('<section class="card stack"></section>');
+  const render = (ev) => {
+    clear(card);
+    const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+    const left = el('<div class="grow" style="min-width:0"></div>');
+    left.append(eventMeta(ev));
+    if (ev.my_hours_here > 0 && !ev.is_over) {
+      left.append(el(`<div class="muted small">You've logged ${esc(ev.my_hours_here)} hours here.</div>`));
+    }
+    row.append(left);
+    const cell = el('<div class="action-cell"></div>');
+    cell.append(el(statusPill(ev.status)));
+    cell.append(actionEl(ev, async () => {
+      await refreshMe();
+      const fresh = await api('/events/' + ev.id);
+      render(fresh);
+    }));
+    row.append(cell);
+    card.append(row);
+    if (amLeader) card.append(el(`<a class="act ghost block" href="#/events/${ev.id}/lead">Manage</a>`));
+  };
+  render(event);
+  return card;
+}
+
+// Leader control: "＋ Add event" toggles a small form (schedule another
+// occurrence) → POST /projects/:id/events → refresh the detail.
+function addEventControl(id) {
+  const wrap = el('<div></div>');
+  const openBtn = el('<button class="act primary block">＋ Add event</button>');
+  openBtn.onclick = () => {
+    clear(wrap);
+    const form = addForm({
+      title: 'Add event',
+      submit: 'Add event',
+      fields: [
+        { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true,
+          validate: (v) => (new Date(v).getTime() < Date.now() - 12 * 3600e3
+            ? 'This start time is in the past — double-check the date.' : null) },
+        { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet' },
+        { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: 120, placeholder: '120' },
+      ],
+      onSubmit: async (body) => {
+        if (body.starts_at) body.starts_at = new Date(body.starts_at).toISOString();
+        await api(`/projects/${id}/events`, { body });
+        toast('Event added');
+        refresh();
+      },
+    });
+    const cancel = el('<button class="act ghost block">Cancel</button>');
+    cancel.onclick = () => refresh();
+    wrap.append(form, cancel);
+  };
+  wrap.append(openBtn);
+  return wrap;
+}
+
+// Inline edit form (leaders only): the DURABLE project fields only. Schedule /
+// location are per-event and edited elsewhere. A changed waiver_text versions
+// server-side.
+function openEdit(id, p) {
+  const form = addForm({
+    title: 'Edit project',
+    submit: 'Save changes',
+    fields: [
+      { name: 'title', label: 'Title', required: true, value: p.title },
+      { name: 'description', label: 'Description', type: 'textarea', value: p.description || '', allowClear: true },
+      { name: 'waiver_text', label: 'Waiver', type: 'textarea', rows: 6, value: (p.waiver && p.waiver.text) || '' },
+    ],
+    onSubmit: async (body) => {
+      await api('/projects/' + id, { method: 'PATCH', body });
+      toast('Saved');
+      refresh();
+    },
+  });
+  const cancel = el('<button class="act ghost block">Cancel</button>');
+  cancel.onclick = () => refresh();
+  const root = el('<div class="stack"></div>');
+  root.append(form, cancel);
+  mount(root);
+}
+
+// ---- event detail (optional deep-link target: #/events/:id) -----------------
+
+export async function eventDetailView(eventId) {
+  mount(spinner());
+  let ev;
+  try {
+    ev = await api('/events/' + eventId);
+  } catch (e) {
+    if (e && e.detail === 'unauthorized') throw e;
+    errScreen(e);
+    return;
+  }
+  const project = ev.project || {};
+
+  const root = el('<div class="stack"></div>');
+  if (project.cover_image_id) {
+    const cov = el('<img class="cover" alt="">');
+    apiBlobURL(`/images/${project.cover_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
+    root.append(cov);
+  }
+
+  const head = el('<section class="card stack"></section>');
+  const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+  const left = el('<div class="grow" style="min-width:0"></div>');
+  left.append(el(`<h1 class="grow">${esc(project.title)}</h1>`));
+  left.append(eventMeta(ev));
+  top.append(left);
+  const cell = el('<div class="action-cell"></div>');
+  cell.append(el(statusPill(ev.status)));
+  cell.append(actionEl(ev, () => { refreshMe(); refresh(); }));
+  top.append(cell);
+  head.append(top);
+  root.append(head);
+
+  if (ev.am_leader) {
+    root.append(el(`<a class="act primary block" href="#/events/${eventId}/lead">Manage event</a>`));
+  }
+
+  // Waiver (collapsed).
+  if (ev.waiver && ev.waiver.text) {
+    const det = el(`<details class="card"><summary>Waiver${ev.waiver.version ? ` (v${esc(ev.waiver.version)})` : ''}</summary></details>`);
+    const wtext = el('<p class="muted small" style="white-space:pre-wrap"></p>');
+    wtext.textContent = ev.waiver.text;
+    det.append(wtext);
+    root.append(det);
+  }
+
+  if (project.id != null) {
+    root.append(el(`<a class="act ghost block" href="#/projects/${esc(project.id)}">View service project</a>`));
+  }
+  mount(root);
+}
+
+// ---- event lead hub (#/events/:id/lead) -------------------------------------
+
+export async function leadView(eventId) {
+  mount(spinner());
+  let ev;
+  try {
+    ev = await api('/events/' + eventId);
+  } catch (e) {
+    if (e && e.detail === 'unauthorized') throw e;
+    errScreen(e);
+    return;
+  }
+  const project = ev.project || {};
+  const pid = project.id;
+
+  if (!ev.am_leader) {
+    const c = el('<div class="card stack center"></div>');
+    c.append(el('<p>Only project leaders can open the lead screen.</p>'));
+    c.append(el(`<a class="act" href="#/projects/${esc(pid)}">View project</a>`));
+    mount(c);
+    return;
+  }
+
+  let roster = { participations: [], checked_in_count: 0 };
+  try {
+    roster = await api(`/events/${eventId}/roster`);
+  } catch (e) {
+    if (e && e.detail === 'unauthorized') throw e;
+    toastErr(e);
+  }
+
+  const root = el('<div class="stack"></div>');
+
+  root.append(el(`<div class="row"><a class="muted small grow" href="#/projects/${esc(pid)}">← Back to project</a></div>`));
+  root.append(el(`<h1>${esc(project.title)}</h1>`));
+  root.append(eventMeta(ev));
+
+  // ---- QR + code ----
+  const qrCard = el('<section class="card stack center"></section>');
+  const qrBox = el('<div class="qr"></div>');
+  const qrImg = el('<img alt="Check-in QR code">');
+  apiBlobURL(`/events/${eventId}/qr.svg`)
+    .then((u) => { qrImg.src = u; })
+    .catch(() => { qrBox.append(el('<div class="muted">QR unavailable</div>')); });
+  qrBox.append(qrImg);
+  qrCard.append(qrBox);
+  qrCard.append(el(`<div class="code">${esc(ev.checkin_code)}</div>`));
+  qrCard.append(el(`<div class="muted small">or open <span class="code">${esc(location.host)}/#/c/${esc(ev.checkin_code)}</span></div>`));
+  qrCard.append(el(`<a class="act primary block" href="#/c/${esc(ev.checkin_code)}">Check in yourself</a>`));
+
+  const regen = el('<button class="act ghost block">Regenerate code</button>');
+  regen.onclick = async () => {
+    if (!confirm('Regenerate the check-in code? The current QR and code will stop working.')) return;
+    try {
+      await api(`/events/${eventId}/code/regenerate`, { method: 'POST' });
+      toast('New code generated');
+      refresh();
+    } catch (e) { toastErr(e); }
+  };
+  qrCard.append(regen);
+  root.append(qrCard);
+
+  // ---- roster ----
+  root.append(el(`<div class="section-label">Roster · ${esc(roster.checked_in_count)} on site</div>`));
+  if (!roster.participations.length) {
+    root.append(emptyState('No one has checked in yet. Share the QR to get started.'));
+  } else {
+    for (const r of roster.participations) root.append(rosterRow(r));
+  }
+
+  // ---- who's coming (RSVPs) + per-attendee event-leader toggle ----
+  const whoLabel = el("<div class=\"section-label\">Who's coming</div>");
+  const whoWrap = el('<section class="card stack"></section>');
+  whoWrap.append(spinner());
+  root.append(whoLabel, whoWrap);
+
+  // ---- close event ----
+  if (ev.status === 'open') {
+    const closeBtn = el('<button class="act del block" style="margin-top:1rem">Close event</button>');
+    closeBtn.onclick = async () => {
+      if (!confirm('Close this event? This checks out everyone still on site and marks it completed.')) return;
+      closeBtn.disabled = true;
+      try {
+        await api(`/events/${eventId}/close`, { method: 'POST' });
+        toast('Event closed');
+        await refreshMe();
+        refresh();
+      } catch (e) { closeBtn.disabled = false; toastErr(e); }
+    };
+    root.append(closeBtn);
+  }
+
+  mount(root);
+  fillWhosComing(eventId, whoWrap, whoLabel);
+}
+
+// Load the RSVP list into the organizer's "Who's coming" section (per event).
+async function fillWhosComing(eventId, wrap, label) {
   let rsvps;
   try {
-    rsvps = await api(`/projects/${id}/rsvps`);
+    rsvps = await api(`/events/${eventId}/rsvps`);
   } catch (e) {
     clear(wrap).append(errNode(e));
     return;
@@ -365,11 +611,11 @@ async function fillWhosComing(id, wrap, label) {
   label.textContent = `Who's coming (${rsvps.length})`;
   clear(wrap);
   if (!rsvps.length) { wrap.append(emptyState('No RSVPs yet.')); return; }
-  for (const r of rsvps) wrap.append(rsvpRow(id, r));
+  for (const r of rsvps) wrap.append(rsvpRow(eventId, r));
 }
 
 // One RSVP row: who, a "checked in" pill, and an event-leader toggle switch.
-function rsvpRow(id, r) {
+function rsvpRow(eventId, r) {
   const row = el('<div class="row"></div>');
   row.append(avatarEl(r.user));
   row.append(el(`<a class="grow" href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
@@ -384,7 +630,7 @@ function rsvpRow(id, r) {
     const next = cb.checked;
     cb.disabled = true;
     try {
-      await api(`/projects/${id}/rsvps/${encodeURIComponent(r.user.id)}/leader`, { body: { is_leader: next } });
+      await api(`/events/${eventId}/rsvps/${encodeURIComponent(r.user.id)}/leader`, { body: { is_leader: next } });
       r.is_leader = next;
     } catch (e) { cb.checked = !next; toastErr(e); }
     finally { cb.disabled = false; }
@@ -393,164 +639,8 @@ function rsvpRow(id, r) {
   return row;
 }
 
-// Inline edit form (leaders only). PATCH; a changed waiver_text versions server-side.
-function openEdit(id, p) {
-  const form = addForm({
-    title: 'Edit project',
-    submit: 'Save changes',
-    fields: [
-      { name: 'title', label: 'Title', required: true, value: p.title },
-      { name: 'description', label: 'Description', type: 'textarea', value: p.description || '', allowClear: true },
-      { name: 'location_text', label: 'Location', required: true, value: p.location_text },
-      { name: 'starts_at', label: 'Starts at', type: 'datetime-local', value: toLocalInput(p.starts_at) },
-      { name: 'expected_minutes', label: 'Expected minutes', type: 'number', min: 1, step: 1, value: p.expected_minutes },
-      { name: 'waiver_text', label: 'Waiver', type: 'textarea', rows: 6, value: (p.waiver && p.waiver.text) || '' },
-    ],
-    onSubmit: async (body) => {
-      if (body.starts_at) body.starts_at = new Date(body.starts_at).toISOString();
-      await api('/projects/' + id, { method: 'PATCH', body });
-      toast('Saved');
-      refresh();
-    },
-  });
-  const cancel = el('<button class="act ghost block">Cancel</button>');
-  cancel.onclick = () => refresh();
-  const root = el('<div class="stack"></div>');
-  root.append(form, cancel);
-  mount(root);
-}
-
-// ---- lead hub ---------------------------------------------------------------
-
-export async function leadView(id) {
-  mount(spinner());
-  let p;
-  try {
-    p = await api('/projects/' + id);
-  } catch (e) {
-    if (e && e.detail === 'unauthorized') throw e;
-    errScreen(e);
-    return;
-  }
-
-  if (!p.am_leader) {
-    const c = el('<div class="card stack center"></div>');
-    c.append(el('<p>Only project leaders can open the lead screen.</p>'));
-    c.append(el(`<a class="act" href="#/projects/${id}">View project</a>`));
-    mount(c);
-    return;
-  }
-
-  let roster = { participations: [], checked_in_count: 0 };
-  try {
-    roster = await api(`/projects/${id}/roster`);
-  } catch (e) {
-    if (e && e.detail === 'unauthorized') throw e;
-    toastErr(e);
-  }
-
-  const root = el('<div class="stack"></div>');
-
-  root.append(el(`<div class="row"><a class="muted small grow" href="#/projects/${id}">← Back to project</a></div>`));
-  root.append(el(`<h1>${esc(p.title)}</h1>`));
-
-  // ---- QR + code ----
-  const qrCard = el('<section class="card stack center"></section>');
-  const qrBox = el('<div class="qr"></div>');
-  const qrImg = el('<img alt="Check-in QR code">');
-  apiBlobURL(`/projects/${id}/qr.svg`)
-    .then((u) => { qrImg.src = u; })
-    .catch(() => { qrBox.append(el('<div class="muted">QR unavailable</div>')); });
-  qrBox.append(qrImg);
-  qrCard.append(qrBox);
-  qrCard.append(el(`<div class="code">${esc(p.checkin_code)}</div>`));
-  qrCard.append(el(`<div class="muted small">or open <span class="code">${esc(location.host)}/#/c/${esc(p.checkin_code)}</span></div>`));
-  qrCard.append(el(`<a class="act primary block" href="#/c/${esc(p.checkin_code)}">Check in yourself</a>`));
-
-  const regen = el('<button class="act ghost block">Regenerate code</button>');
-  regen.onclick = async () => {
-    if (!confirm('Regenerate the check-in code? The current QR and code will stop working.')) return;
-    try {
-      await api(`/projects/${id}/code/regenerate`, { method: 'POST' });
-      toast('New code generated');
-      refresh();
-    } catch (e) { toastErr(e); }
-  };
-  qrCard.append(regen);
-  root.append(qrCard);
-
-  // ---- roster ----
-  root.append(el(`<div class="section-label">Roster · ${esc(roster.checked_in_count)} on site</div>`));
-  if (!roster.participations.length) {
-    root.append(emptyState('No one has checked in yet. Share the QR to get started.'));
-  } else {
-    for (const r of roster.participations) root.append(rosterRow(id, r));
-  }
-
-  // ---- leaders ----
-  root.append(el('<div class="section-label">Leaders</div>'));
-  const leadWrap = el('<section class="card stack"></section>');
-  for (const lead of p.leaders || []) {
-    const row = el('<div class="row"></div>');
-    row.append(avatarEl(lead));
-    row.append(el(`<a class="grow" href="#/u/${esc(lead.id)}">${esc(lead.display_name)}</a>`));
-    if (!(p.owner && lead.id === p.owner.id)) {
-      const x = el('<button class="act del" title="Remove leader">✕</button>');
-      x.onclick = async () => {
-        if (!confirm(`Remove ${lead.display_name} as a leader?`)) return;
-        try {
-          await api(`/projects/${id}/leaders/${encodeURIComponent(lead.id)}`, { method: 'DELETE' });
-          toast('Leader removed');
-          refresh();
-        } catch (e) { toastErr(e); }
-      };
-      row.append(x);
-    }
-    leadWrap.append(row);
-  }
-  const alForm = el('<form class="row" style="gap:.4rem"></form>');
-  const alInput = el('<input class="grow" name="email" placeholder="Add leader by email" autocomplete="off" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false">');
-  alForm.append(alInput, el('<button class="act" type="submit">Add</button>'));
-  const alBtn = alForm.querySelector('button');
-  alForm.onsubmit = async (e) => {
-    e.preventDefault();
-    const em = alInput.value.trim().toLowerCase();
-    if (!em || alBtn.disabled) return;
-    alBtn.disabled = true; // no double-submit race ("added" then "already a leader")
-    try {
-      await api(`/projects/${id}/leaders`, { body: { email: em } });
-      toast('Leader added');
-      refresh();
-    } catch (ex) { toastErr(ex); } finally { alBtn.disabled = false; }
-  };
-  leadWrap.append(alForm);
-  root.append(leadWrap);
-
-  // ---- images ----
-  root.append(el('<div class="section-label">Photos</div>'));
-  root.append(imagesStrip('project', id, p.image_ids, { canEdit: true, onChange: refresh, primaryId: p.primary_image_id }));
-
-  // ---- close ----
-  if (p.status === 'open') {
-    const closeBtn = el('<button class="act del block" style="margin-top:1rem">Close project</button>');
-    closeBtn.onclick = async () => {
-      if (!confirm('Close this project? This checks out everyone still on site and marks it completed.')) return;
-      closeBtn.disabled = true;
-      try {
-        await api(`/projects/${id}/close`, { method: 'POST' });
-        toast('Project closed');
-        await refreshMe();
-        refresh();
-      } catch (e) { closeBtn.disabled = false; toastErr(e); }
-    };
-    root.append(closeBtn);
-  }
-
-  mount(root);
-}
-
 // One roster row: who, times, and a per-row Check out while still on site.
-function rosterRow(id, r) {
+function rosterRow(r) {
   const row = el('<div class="card row" style="align-items:flex-start"></div>');
   row.append(avatarEl(r.user));
   const mid = el('<div class="grow"></div>');

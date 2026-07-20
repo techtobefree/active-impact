@@ -42,35 +42,38 @@ def user(email, display):
 
 
 def project(owner, title, location, minutes, hours_ago_start=0):
+    """Create a project + its first event (the occurrence). Returns the event row."""
     with db.tx() as c:
         p = c.execute(
-            "INSERT INTO projects(owner_id, title, description, location_text, "
-            "starts_at, expected_minutes, checkin_code) "
-            "VALUES (%s, %s, %s, %s, now() - make_interval(hours => %s), %s, %s) RETURNING *",
-            (owner["id"], title, f"Join us: {title}.", location,
-             hours_ago_start, minutes, secrets.token_urlsafe(6)),
+            "INSERT INTO projects(owner_id, title, description) VALUES (%s, %s, %s) RETURNING id",
+            (owner["id"], title, f"Join us: {title}."),
         ).fetchone()
         c.execute("INSERT INTO project_leaders(project_id, user_id) VALUES (%s, %s)",
                   (p["id"], owner["id"]))
         c.execute("INSERT INTO waivers(project_id, version, text) VALUES (%s, 1, %s)",
                   (p["id"], "I volunteer at my own risk. (Demo waiver.)"))
-    return p
+        ev = c.execute(
+            "INSERT INTO events(project_id, location_text, starts_at, expected_minutes, checkin_code) "
+            "VALUES (%s, %s, now() - make_interval(hours => %s), %s, %s) RETURNING *",
+            (p["id"], location, hours_ago_start, minutes, secrets.token_urlsafe(6)),
+        ).fetchone()
+    return ev
 
 
-def volunteered(project_row, u, minutes_ago_in):
-    """A completed participation: checked in `minutes_ago_in` ago, then out now."""
+def volunteered(event_row, u, minutes_ago_in):
+    """A completed participation on an event: checked in `minutes_ago_in` ago, then out now."""
     with db.tx() as c:
         waiver = c.execute("SELECT id FROM waivers WHERE project_id=%s ORDER BY version DESC LIMIT 1",
-                           (project_row["id"],)).fetchone()
+                           (event_row["project_id"],)).fetchone()
         part = c.execute(
-            "INSERT INTO participations(project_id, user_id, waiver_id, checked_in_at) "
+            "INSERT INTO participations(event_id, user_id, waiver_id, checked_in_at) "
             "VALUES (%s, %s, %s, now() - make_interval(mins => %s)) RETURNING *",
-            (project_row["id"], u["id"], waiver["id"], minutes_ago_in),
+            (event_row["id"], u["id"], waiver["id"], minutes_ago_in),
         ).fetchone()
         # Reuse the real checkout math + mint.
         do_row = c.execute(
-            "SELECT p.id, p.user_id, p.checked_in_at, pr.expected_minutes "
-            "FROM participations p JOIN projects pr ON pr.id=p.project_id WHERE p.id=%s",
+            "SELECT p.id, p.user_id, p.checked_in_at, p.event_id, e.project_id, e.expected_minutes "
+            "FROM participations p JOIN events e ON e.id=p.event_id WHERE p.id=%s",
             (part["id"],),
         ).fetchone()
         tokens.do_checkout(c, dict(do_row))

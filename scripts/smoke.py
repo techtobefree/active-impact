@@ -86,9 +86,13 @@ pid = j["id"]
 s, j = call("GET", f"/api/projects/{pid}", token=tok_a)
 check(s == 200 and j.get("am_leader") is True, "project detail: am_leader", (s, j))
 check(bool(j.get("waiver", {}).get("text")), "waiver v1 present", j.get("waiver"))
-code = j.get("checkin_code")
-check(bool(code), "checkin_code exposed to leader", j)
-s, raw = call("GET", f"/api/projects/{pid}/qr.svg", token=tok_a, raw=True)
+events = j.get("events") or []
+check(bool(events), "project has its first event", j)
+ev = events[0]
+eid = ev["id"]
+code = ev.get("checkin_code")
+check(bool(code), "checkin_code exposed to leader (on the event)", ev)
+s, raw = call("GET", f"/api/events/{eid}/qr.svg", token=tok_a, raw=True)
 check(s == 200 and b"<svg" in raw, "qr.svg is SVG", s)
 
 # 4. b resolves the code, agrees, cannot double-agree
@@ -100,7 +104,7 @@ s, j = call("POST", f"/api/checkin/{code}/agree", token=tok_b)
 check(s == 409 and j.get("detail") == "already_checked_in", "duplicate agree 409", (s, j))
 
 # 5. a checks b out via the roster (rows carry participation id)
-s, roster = call("GET", f"/api/projects/{pid}/roster", token=tok_a)
+s, roster = call("GET", f"/api/events/{eid}/roster", token=tok_a)
 parts = roster.get("participations") if isinstance(roster, dict) else roster
 check(s == 200 and parts, "roster non-empty", (s, roster))
 part_id = parts[0]["id"]

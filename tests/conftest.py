@@ -43,10 +43,13 @@ _db.init()
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 
-# Child-first order so RESTART IDENTITY CASCADE is clean.
+# Child-first order so RESTART IDENTITY CASCADE is clean. audit_log is the renamed
+# append-only log; events is the new occurrence table (participations/rsvps hang
+# off it); follows stays project-scoped.
 _TABLES = [
-    "events", "token_entries", "catalog_claims", "catalog_items", "participations",
-    "waivers", "follows", "project_leaders", "projects", "images", "sessions", "users",
+    "audit_log", "token_entries", "catalog_claims", "catalog_items", "participations",
+    "rsvps", "waivers", "follows", "events", "project_leaders", "projects", "images",
+    "sessions", "users",
 ]
 
 

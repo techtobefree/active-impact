@@ -74,14 +74,38 @@ class Session(Base):
 
 
 class Project(Base):
+    """The persistent SERVICE PROJECT. It has many events (occurrences).
+
+    A project keeps its organizers (project_leaders), versioned waivers, images,
+    and follows. The event-specific fields (schedule/location/code/status) live on
+    ``events`` -- a project is now the durable umbrella, an event is one session.
+    """
     __tablename__ = "projects"
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    location_text: Mapped[str] = mapped_column(Text, nullable=False)  # free text; geocoding deferred
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        Index("idx_projects_owner", "owner_id"),
+    )
+
+
+class Event(Base):
+    """An occurrence of a service project -- a specific dated/located session.
+
+    Owns what used to live on the project: ``starts_at``, ``expected_minutes``,
+    ``location_text``, ``checkin_code`` (unique), and the ``open|completed``
+    ``status``. ``is_over`` is a per-EVENT property (completed OR now() past
+    starts_at + expected_minutes). participations and rsvps hang off an event.
+    """
+    __tablename__ = "events"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     starts_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     expected_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    location_text: Mapped[str] = mapped_column(Text, nullable=False)  # free text; geocoding deferred
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     checkin_code: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # secrets.token_urlsafe(6)
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -89,8 +113,8 @@ class Project(Base):
     __table_args__ = (
         CheckConstraint("expected_minutes > 0", name="expected_minutes_pos"),
         CheckConstraint("status IN ('open', 'completed')", name="status_valid"),
-        Index("idx_projects_starts", "starts_at"),
-        Index("idx_projects_owner", "owner_id"),
+        Index("idx_events_project", "project_id"),
+        Index("idx_events_starts", "starts_at"),
     )
 
 
@@ -105,14 +129,14 @@ class ProjectLeader(Base):
 class Rsvp(Base):
     __tablename__ = "rsvps"
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     # Event-leader DESIGNATION -- a pure flag with no powers yet. Distinct from
     # project_leaders (organizers). Toggled by the organizer (am_leader).
     is_leader: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
-        UniqueConstraint("project_id", "user_id", name="project_user"),
+        UniqueConstraint("event_id", "user_id", name="event_user"),
         Index("idx_rsvps_user", "user_id"),
     )
 
@@ -142,7 +166,7 @@ class Waiver(Base):
 class Participation(Base):
     __tablename__ = "participations"
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     waiver_id: Mapped[int] = mapped_column(ForeignKey("waivers.id"), nullable=False)  # the signed version
     checked_in_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -153,11 +177,11 @@ class Participation(Base):
     __table_args__ = (
         CheckConstraint("minutes >= 0", name="minutes_nonneg"),
         CheckConstraint("tokens_awarded >= 0", name="tokens_nonneg"),
-        # One OPEN participation per (project, user); re-check-in after checkout is fine.
-        Index("idx_participations_open", "project_id", "user_id",
+        # One OPEN participation per (event, user); re-check-in after checkout is fine.
+        Index("idx_participations_open", "event_id", "user_id",
               unique=True, postgresql_where=text("checked_out_at IS NULL")),
         Index("idx_participations_user", "user_id"),
-        Index("idx_participations_project", "project_id"),
+        Index("idx_participations_event", "event_id"),
     )
 
 
@@ -226,28 +250,34 @@ class CatalogClaim(Base):
     )
 
 
-class Event(Base):
+class AuditLog(Base):
     """Append-only audit log — one immutable row per check-in / check-out.
 
-    Written in the SAME tx as the state change it records (via app/events.log),
-    so an event can never exist without its change or vice-versa. Rows are never
-    updated or deleted; they are the source of truth for later reporting.
+    Written in the SAME tx as the state change it records (via app/audit.log),
+    so a log row can never exist without its change or vice-versa. Rows are never
+    updated or deleted; they are the source of truth for later reporting. Carries
+    both the ``event_id`` (the occurrence) and the ``project_id`` (its umbrella,
+    set to event.project_id when logging) for event- and project-level reporting.
+
+    (Renamed from the old ``Event``/``events`` audit model — the name ``events``
+    now belongs to the service-project occurrence table above.)
     """
-    __tablename__ = "events"
+    __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     type: Mapped[str] = mapped_column(Text, nullable=False)  # 'check_in' | 'check_out'
     actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # who performed it
     subject_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # the volunteer it is about
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    event_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="SET NULL"))
     participation_id: Mapped[int | None] = mapped_column(ForeignKey("participations.id", ondelete="SET NULL"))
     minutes: Mapped[int | None] = mapped_column(Integer)
     tokens: Mapped[int | None] = mapped_column(Integer)
     meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
-        Index("idx_events_type", "type", "created_at"),
-        Index("idx_events_project", "project_id"),
-        Index("idx_events_subject", "subject_user_id"),
+        Index("idx_audit_log_type", "type", "created_at"),
+        Index("idx_audit_log_project", "project_id"),
+        Index("idx_audit_log_subject", "subject_user_id"),
     )
 
 

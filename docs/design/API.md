@@ -1,8 +1,10 @@
 # API Contract
 
-> The complete HTTP surface — 34 endpoints. JSON only, same-origin, no CORS
+> The complete HTTP surface — 43 endpoints. JSON only, same-origin, no CORS
 > middleware. Conventions first, then every endpoint. Field constraints live in
 > OVERVIEW.md § Constants; read shapes in DOMAIN.md § Standard read shapes.
+> A **project** is the durable service project; an **event** is one occurrence of
+> it (its own schedule/place/code/status). Per-occurrence actions are event-scoped.
 
 ## Conventions
 
@@ -43,38 +45,52 @@ and injects it into every protected handler.
 
 ## Projects — `app/projects.py`
 
+A project is the durable umbrella; each occurrence is an **event** (see below).
+Project endpoints are project-scoped; per-occurrence actions are event-scoped.
+
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/projects` 📄 | `?scope=upcoming` (default: **not over** — `status='open' AND now() <= starts_at + expected_minutes`, so future or ongoing, ASC) · `past` (**over** — `status='completed' OR now() > starts_at + expected_minutes`; the exact complement of upcoming, so an ended event lands here and nowhere else, DESC) · `mine` (**participations ∪ leaderships** — a poster who never checked in still finds their project here). `&q=` ILIKE on title/description/location. Returns **project_card[]**, each card also carrying per-requesting-user action state: `is_over`, `my_rsvp {is_leader} \| null`, `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` (batched, no N+1) — so the feed can drive the action button without opening the event | — |
-| `POST /api/projects` | `{title, description?, location_text, starts_at, expected_minutes, waiver_text?}` → **201** project detail. In one tx: insert project (fresh `checkin_code`), owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` template — placeholder marked *not legal advice*) | 422 |
-| `GET /api/projects/{id}` | Detail: card fields + `description`, `image_ids[]`, `primary_image_id` (cover: primary else first by id, or null), `leaders[] {id, display_name}`, `waiver {id, version, text}` (current), `am_leader`, `is_over` (**`status='completed'` OR `now() > starts_at + expected_minutes`**), `is_following` (a follow row exists for the requesting user), `follower_count` (total follows for the project), `my_rsvp {is_leader} \| null`, `checkin_code` (**present only when `am_leader`** — feeds the lead screen's text fallback and smoke.py), `my_open_participation {id, checked_in_at} \| null`, `my_hours_here` | 404 |
-| `PATCH /api/projects/{id}` | Leader only. `{title?, description?, location_text?, starts_at?, expected_minutes?, waiver_text?}` — a **changed** `waiver_text` INSERTs waiver v(n+1) (I5) | 403 `not_a_leader`; 409 `project_not_open` |
-| `POST /api/projects/{id}/close` | Leader. `open → completed`; checks out ALL open participations, minting (capped math) in the same tx. Also how a project that never happened is ended — zero-minute participations mint 0 | 403; 409 `project_not_open` |
-| `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (the response shows display names, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
+| `GET /api/projects` 📄 | `?scope=upcoming` (default: projects with **≥1 not-over event**; card embeds the **soonest** not-over event; ordered by that event ASC) · `past` (projects with **no** not-over event; card embeds the **most-recent** event, or `null`; ordered by that event DESC) · `mine` (**leaderships ∪ rsvp/participation on any event**; DESC). `&q=` ILIKE on project title/description or any event's location. Returns **project_card[]** (`id, title, cover_image_id, follower_count, event`), the embedded **event_card** carrying per-requesting-user state (`is_over, checked_in_count, my_rsvp, my_open_participation, my_hours_here`) batched by event id — no N+1 | — |
+| `POST /api/projects` | `{title, description?, waiver_text?, location_text, starts_at, expected_minutes}` → **201** project detail. In one tx: insert project, owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` — placeholder marked *not legal advice*), and the **first event** (fresh `checkin_code`, status `open`) | 422 |
+| `GET /api/projects/{id}` | Detail: `id, title, description, owner {id,display_name}, leaders[] {id,display_name}, image_ids[], cover_image_id, primary_image_id` (cover: primary else first by id, or null)`, waiver {id,version,text}` (current)`, am_leader, is_following, follower_count, events[]` — each an **event_detail** (`id, starts_at, location_text, expected_minutes, status, is_over, checked_in_count, my_rsvp, my_open_participation, my_hours_here` + `checkin_code` **only when `am_leader`**), ordered not-over ASC then over DESC | 404 |
+| `PATCH /api/projects/{id}` | Leader only. `{title?, description?, waiver_text?}` — a **changed** `waiver_text` INSERTs waiver v(n+1) (I5). Event fields are edited per event, not here | 403 `not_a_leader` |
+| `POST /api/projects/{id}/events` | Leader. `{location_text, starts_at, expected_minutes}` → **201** **event_detail** for the new occurrence (fresh `checkin_code`, status `open`) | 403 `not_a_leader`; 404; 422 |
+| `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (display names only, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
 | `DELETE /api/projects/{id}/leaders/{user_id}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
-| `POST /api/projects/{id}/code/regenerate` | Leader. New `checkin_code` (old QR instantly dead) → `{checkin_code}` | 403 |
-| `GET /api/projects/{id}/qr.svg` | Leader. `image/svg+xml` QR of `{scheme}://{host}/#/c/{checkin_code}` — **origin = `request.url.scheme` + Host**. Behind Caddy the scheme is https because the Dockerfile CMD runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` (trusting X-Forwarded-Proto; safe — only Caddy can reach the app). On the dev LAN it is honestly `http://<ip>:8000`, so M2's phone-scan verify works | 403 |
-| `GET /api/projects/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403 |
-| `POST /api/projects/{id}/rsvp` | RSVP any time the project is **not over**. Idempotent (`ON CONFLICT (project_id,user_id) DO NOTHING`). → project detail | 404; 409 `project_over` |
 | `POST /api/projects/{id}/follow` | Follow the project. Idempotent (`ON CONFLICT (user_id,project_id) DO NOTHING`). → `{is_following: true, follower_count}` | 404 |
 | `DELETE /api/projects/{id}/follow` | Unfollow. Idempotent. **200** (not 204 — the frontend needs the fresh count) → `{is_following: false, follower_count}` | 404 |
-| `POST /api/projects/{id}/checkin` | **Self-service check-in** (no QR, no waiver screen). Ensures an RSVP row, then inserts a participation pinned to the **current** waiver (I6). Re-check-in after checkout is fine while not over. → project detail | 404; 409 `project_over`; 409 `already_checked_in` |
-| `GET /api/projects/{id}/rsvps` | Organizer (`am_leader`) only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, created_at}]` | 403 `not_a_leader`; 404 |
-| `POST /api/projects/{id}/rsvps/{user_id}/leader` | Organizer only. `{is_leader: bool}` sets the event-leader **designation** (a flag with no powers yet — NOT `project_leaders`). → updated rsvps list | 403 `not_a_leader`; 404 `not_found` (that user never RSVP'd) |
+
+## Events — `app/events.py`
+
+The per-occurrence surface. **Leader** = a `project_leaders` organizer of the
+event's project (resolved event → project_id).
+
+| Endpoint | Notes | Errors |
+|---|---|---|
+| `GET /api/events/{id}` | **event_detail** + `project {id, title, cover_image_id}` summary + `waiver {id,version,text}` (the project's current) + `am_leader` | 404 |
+| `POST /api/events/{id}/rsvp` | RSVP any time the event is **not over**. Idempotent (`ON CONFLICT (event_id,user_id) DO NOTHING`). → event detail | 404; 409 `event_over` |
+| `POST /api/events/{id}/checkin` | **Self-service check-in** (no QR, no waiver screen). Ensures an RSVP row, then inserts a participation pinned to the event's project's **current** waiver (I6). Re-check-in after checkout is fine while not over. → event detail | 404; 409 `event_over`; 409 `already_checked_in` |
+| `GET /api/events/{id}/rsvps` | Leader only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, created_at}]` | 403 `not_a_leader`; 404 |
+| `POST /api/events/{id}/rsvps/{user_id}/leader` | Leader only. `{is_leader: bool}` sets the event-leader **designation** (a flag with no powers yet — NOT `project_leaders`). → updated rsvps list | 403 `not_a_leader`; 404 `not_found` (that user never RSVP'd) |
+| `POST /api/events/{id}/close` | Leader. `open → completed`; checks out ALL open participations, minting (capped math) in the same tx. Also how an event that never happened is ended — zero-minute participations mint 0. → event detail | 403; 404; 409 `event_not_open` |
+| `POST /api/events/{id}/code/regenerate` | Leader. New `checkin_code` (old QR instantly dead) → `{checkin_code}` | 403; 404 |
+| `GET /api/events/{id}/qr.svg` | Leader. `image/svg+xml` QR of `{scheme}://{host}/#/c/{checkin_code}` — **origin = `request.url.scheme` + Host**. Behind Caddy the scheme is https (uvicorn `--proxy-headers`); on the dev LAN it is honestly `http://<ip>:8000` | 403; 404 |
+| `GET /api/events/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403; 404 |
 
 ## Check-in — `app/checkin.py`
 
 The QR encodes a URL, so the volunteer's **native camera** opens the PWA at
-`#/c/{code}`; the frontend then drives these:
+`#/c/{code}`; a check-in code belongs to an **event**. The frontend then drives:
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/checkin/{code}` | Resolve a scanned code → `{project: project_card, waiver: {id, version, text}, my_open_participation \| null}` | 404 `invalid_code` (unknown code or non-`open` project) |
-| `POST /api/checkin/{code}/agree` | **The signature.** → **201** participation. One tx: re-validate code, ensure an RSVP row (idempotent — so QR check-ins appear in the organizer's RSVP list), insert participation pinned to the **current** waiver version. Leaders check in through this same endpoint (their lead screen has the code) | 404 `invalid_code`; 409 `already_checked_in` |
-| `POST /api/participations/{id}/checkout` | Self **or** leader of that project. Runs the checkout math from DOMAIN.md (half-up minutes, capped tokens, mint) in one tx → updated participation incl. `minutes`, `tokens_awarded` | 403 `not_allowed`; 409 `already_checked_out`; 404 |
+| `GET /api/checkin/{code}` | Resolve a scanned code → `{event: event_card, project: project_card (embedding that event), waiver: {id, version, text}, my_open_participation \| null}` | 404 `invalid_code` (unknown code or non-`open` event) |
+| `POST /api/checkin/{code}/agree` | **The signature.** → **201** participation (carries `event_id`). One tx: re-validate code, ensure an RSVP row (idempotent — so QR check-ins appear in the organizer's RSVP list), insert participation pinned to the event's project's **current** waiver version. Leaders check in through this same endpoint | 404 `invalid_code`; 409 `already_checked_in` |
+| `POST /api/participations/{id}/checkout` | Self **or** leader of the event's project. Joins participation → event for `expected_minutes`; runs the checkout math from DOMAIN.md (half-up minutes, capped tokens, mint) in one tx → updated participation incl. `minutes`, `tokens_awarded` | 403 `not_allowed`; 409 `already_checked_out`; 404 |
 
-Every check-in and check-out is recorded to the internal append-only **events**
-audit log (`events` table) in the same tx as the change — no public endpoint yet.
+Every check-in and check-out is recorded to the internal append-only **audit log**
+(`audit_log` table) in the same tx as the change, carrying both `event_id` and
+`project_id` — no public endpoint yet.
 
 ## Tokens — `app/tokens.py`
 
@@ -125,8 +141,8 @@ charity session can instead be posted as a *project* to earn via check-in.
 
 | Actor on resource | May |
 |---|---|
-| Any authed user | Browse everything; create projects/items; check in via a valid code; check **self** out; tip; claim offers; edit own profile |
-| Project **leader** (incl. owner) | All project edits, QR/code, roster, check out anyone there, close, add/remove leaders, project images |
+| Any authed user | Browse everything; create projects (with a first event); check in via a valid code; RSVP/self check-in to an event; check **self** out; tip; claim offers; edit own profile |
+| Project **leader** (incl. owner) | All project edits, add events, and per-event QR/code/roster/close, check out anyone there, event-leader designation; add/remove leaders; project images |
 | Project **owner** | Leader powers; irremovable as leader |
 | Item **poster** | Edit/close item, accept/decline claims, item images |
 | Claimant | Cancel own pending claim |

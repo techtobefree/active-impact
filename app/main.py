@@ -18,6 +18,7 @@ from app.tokens import InsufficientBalance
 from app.auth import router as auth_router
 from app.users import router as users_router
 from app.projects import router as projects_router
+from app.events import router as events_router
 from app.checkin import router as checkin_router
 from app.tokens import router as tokens_router
 from app.catalog import router as catalog_router
@@ -77,6 +78,7 @@ def health():
 api.include_router(auth_router)
 api.include_router(users_router)
 api.include_router(projects_router)
+api.include_router(events_router)
 api.include_router(checkin_router)
 api.include_router(tokens_router)
 api.include_router(catalog_router)

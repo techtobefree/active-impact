@@ -13,46 +13,57 @@
 
 ```
 users ──┬── sessions                    (opaque bearer tokens, 30-day expiry)
-        ├── projects (owner) ──┬── project_leaders   (owner auto-added; leaders manage)
-        │                      ├── rsvps             (RSVP intent; is_leader = event-leader
-        │                      │                      DESIGNATION, a flag with no powers yet)
+        ├── projects (owner) ──┬── project_leaders   (organizers; manage the project + all its events)
+        │                      ├── waivers           (versioned, immutable text; project-scoped)
         │                      ├── follows           (interest / bookmark; drives follower_count)
-        │                      ├── waivers           (versioned, immutable text)
-        │                      └── participations    (check-in/out; the WAIVER SIGNATURE;
-        │                                             source of minutes → tokens)
+        │                      └── events ──┬── rsvps          (RSVP intent; is_leader = event-leader
+        │                        (occurrence)│                  DESIGNATION, a flag with no powers yet)
+        │                                    └── participations (check-in/out; the WAIVER SIGNATURE;
+        │                                                        source of minutes → tokens)
         ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
         ├── token_entries              (append-only ledger: earn | tip | spend)
-        ├── events                     (append-only audit log: check_in | check_out)
+        ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
         └── images                     (BYTEA, polymorphic: project | catalog_item)
 ```
 
 Conceptual rules:
 
-- A **project** is anything with a time and a place (a need for labor *is* a
-  project). A **catalog item** is a standing offer/need for goods or services.
+- A **project** is the persistent *service project* — the durable umbrella (title,
+  description, organizers, versioned waivers, images, follows). Each time it
+  actually runs is an **event**: one occurrence with its own `starts_at`,
+  `location_text`, `expected_minutes`, `checkin_code`, and `open|completed`
+  status. A project has **many events**. A **catalog item** is a standing
+  offer/need for goods or services.
+- **rsvps and participations hang off an EVENT** (`event_id`), not the project.
+  Waivers stay **project-scoped**; checking in to an event pins the event's
+  project's current waiver version.
 - A **participation** is created by agreeing to the waiver at check-in and closed
   at check-out. It is simultaneously: the attendance record, the signed waiver
   (via `waiver_id`), and the time sheet (minutes → tokens).
 - The **ledger** (`token_entries`) is append-only; `users.balance` is a cached,
   guarded materialization of it. They must always agree.
-- The **events** log (`events`) is an append-only audit trail: one immutable
+- The **audit log** (`audit_log`, formerly the `events` table before that name was
+  reassigned to the occurrence domain) is an append-only trail: one immutable
   `check_in` / `check_out` row per event, written in the **same transaction** as
-  the state change it records (so an event never exists without its change, nor a
-  change without its event). Rows are never updated or deleted — they are the
-  source of truth for later reporting.
+  the state change it records (so a row never exists without its change, nor a
+  change without its row). Each row carries both the `event_id` (occurrence) and
+  the `project_id` (its umbrella) for event- and project-level reporting. Rows are
+  never updated or deleted — the source of truth for later reporting.
 - **All multi-statement writes are transactional** via `db.tx()` (one
   `conn.transaction()`): the state change and its ledger/audit rows commit or roll
   back together.
-- **Liveness is `status`**, everywhere: projects are `open|completed`, items are
+- **Liveness is `status`**, everywhere: **events** are `open|completed`, items are
   `active|closed`, claims have their lifecycle. No soft-delete columns exist
   except none at all — images are hard-deleted (nothing references them).
-- **A project is over** when `status='completed'` OR `now() > starts_at +
-  expected_minutes`. The feed splits on exactly this: **`upcoming` = not over**
-  (future or ongoing), **`past` = over** — complementary, so an ended event shows
-  under `past` and never under `upcoming`.
+- **An event is over** when `status='completed'` OR `now() > starts_at +
+  expected_minutes` (a per-EVENT property). The feed splits projects on exactly
+  this: **`upcoming` = has a not-over event** (card shows the soonest such event),
+  **`past` = has no not-over event** (card shows the most-recent event, or null) —
+  complementary, so a project whose only event ended shows under `past` and never
+  under `upcoming`.
 - **A follow** (`follows`) is a lightweight bookmark / interest signal, one row
-  per (user, project), distinct from an RSVP (attendance intent). It carries no
-  powers; it only drives `is_following` and `follower_count`.
+  per (user, project), distinct from an RSVP (attendance intent on an event). It
+  carries no powers; it only drives `is_following` and `follower_count`.
 
 ## DDL house style
 
@@ -107,23 +118,38 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
 -- ---- impact projects --------------------------------------------------------
 
+-- The DURABLE service project. Event-specific fields (schedule/place/code/status)
+-- live on `events`; a project has many events.
 CREATE TABLE IF NOT EXISTS projects (
   id               SERIAL PRIMARY KEY,
   owner_id         INTEGER NOT NULL REFERENCES users(id),
   title            TEXT NOT NULL,
   description      TEXT NOT NULL DEFAULT '',
-  location_text    TEXT NOT NULL,              -- free text; maps/geocoding deferred
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_projects_owner  ON projects(owner_id);
+
+-- An EVENT is one occurrence of a project: a specific dated/located session with
+-- its own check-in code and open/completed lifecycle. participations and rsvps
+-- hang off an event. is_over := status='completed' OR now() > starts_at +
+-- expected_minutes (per event).
+CREATE TABLE IF NOT EXISTS events (
+  id               BIGSERIAL PRIMARY KEY,
+  project_id       INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   starts_at        TIMESTAMPTZ NOT NULL,
   expected_minutes INTEGER NOT NULL CHECK (expected_minutes > 0),
+  location_text    TEXT NOT NULL,              -- free text; maps/geocoding deferred
   status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
   checkin_code     TEXT NOT NULL UNIQUE,       -- secrets.token_urlsafe(6); regenerable
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_projects_starts ON projects(starts_at);
-CREATE INDEX IF NOT EXISTS idx_projects_owner  ON projects(owner_id);
+CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
+CREATE INDEX IF NOT EXISTS idx_events_starts  ON events(starts_at);
 
--- Leaders may edit the project, show the QR, manage the roster, close it.
+-- Leaders may edit the project, add events, show a QR, manage the roster, close
+-- an event.
 -- The owner is inserted here at project creation and cannot be removed.
 CREATE TABLE IF NOT EXISTS project_leaders (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -133,17 +159,17 @@ CREATE TABLE IF NOT EXISTS project_leaders (
 );
 CREATE INDEX IF NOT EXISTS idx_leaders_user ON project_leaders(user_id);
 
--- RSVP / check-in intent. One row per (project, user), created by
--- POST /api/projects/{id}/rsvp, self check-in, or a QR agree (all idempotent).
+-- RSVP / check-in intent on an EVENT. One row per (event, user), created by
+-- POST /api/events/{id}/rsvp, self check-in, or a QR agree (all idempotent).
 -- is_leader is an event-leader DESIGNATION (a pure flag with no powers yet),
 -- toggled by the organizer -- DISTINCT from project_leaders (organizers).
 CREATE TABLE IF NOT EXISTS rsvps (
   id         SERIAL PRIMARY KEY,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event_id   BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   user_id    INTEGER NOT NULL REFERENCES users(id),
   is_leader  BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (project_id, user_id)                 -- constraint name: project_user
+  UNIQUE (event_id, user_id)                   -- constraint name: event_user
 );
 CREATE INDEX IF NOT EXISTS idx_rsvps_user ON rsvps(user_id);
 
@@ -171,25 +197,25 @@ CREATE TABLE IF NOT EXISTS waivers (
   UNIQUE (project_id, version)
 );
 
--- A participation is the check-in record, the signed waiver, and the time sheet.
--- Created by POST /api/checkin/{code}/agree; closed by checkout (self, leader,
--- or project close). tokens_awarded is set exactly once, at checkout.
+-- A participation is the check-in record, the signed waiver, and the time sheet,
+-- on an EVENT. Created by POST /api/checkin/{code}/agree; closed by checkout
+-- (self, leader, or event close). tokens_awarded is set exactly once, at checkout.
 CREATE TABLE IF NOT EXISTS participations (
   id              SERIAL PRIMARY KEY,
-  project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event_id        BIGINT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   user_id         INTEGER NOT NULL REFERENCES users(id),
-  waiver_id       INTEGER NOT NULL REFERENCES waivers(id), -- the version agreed to
+  waiver_id       INTEGER NOT NULL REFERENCES waivers(id), -- the version agreed to (project-scoped)
   checked_in_at   TIMESTAMPTZ NOT NULL DEFAULT now(),      -- agreement timestamp = signature
   checked_out_at  TIMESTAMPTZ,
   minutes         INTEGER CHECK (minutes >= 0),            -- actual elapsed, half-up
   tokens_awarded  INTEGER CHECK (tokens_awarded >= 0),     -- from CAPPED minutes; may be 0
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- One OPEN participation per user per project (re-check-in after checkout is fine).
+-- One OPEN participation per user per event (re-check-in after checkout is fine).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_participations_open
-  ON participations(project_id, user_id) WHERE checked_out_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_participations_user    ON participations(user_id);
-CREATE INDEX IF NOT EXISTS idx_participations_project ON participations(project_id);
+  ON participations(event_id, user_id) WHERE checked_out_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_participations_user  ON participations(user_id);
+CREATE INDEX IF NOT EXISTS idx_participations_event ON participations(event_id);
 
 -- ---- impact tokens ----------------------------------------------------------
 
@@ -272,24 +298,27 @@ CREATE TABLE IF NOT EXISTS images (
 );
 CREATE INDEX IF NOT EXISTS idx_images_entity ON images(entity, entity_id);
 
--- events: append-only audit log. One immutable row per check-in / check-out,
--- written in the SAME tx as the state change (see app/events.log). Never updated
--- or deleted -- the source of truth for later reporting.
-CREATE TABLE IF NOT EXISTS events (
+-- audit_log: append-only audit log (renamed from the old `events` table, which
+-- name now belongs to the occurrence domain above). One immutable row per
+-- check-in / check-out, written in the SAME tx as the state change (see
+-- app/audit.log). Carries the occurrence (event_id) AND its project (project_id).
+-- Never updated or deleted -- the source of truth for later reporting.
+CREATE TABLE IF NOT EXISTS audit_log (
   id               BIGSERIAL PRIMARY KEY,
   type             TEXT NOT NULL,                          -- 'check_in' | 'check_out'
   actor_user_id    INTEGER REFERENCES users(id),           -- who performed it (self / leader / closer)
   subject_user_id  INTEGER REFERENCES users(id),           -- the volunteer it is about
   project_id       INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  event_id         BIGINT  REFERENCES events(id)   ON DELETE SET NULL,
   participation_id INTEGER REFERENCES participations(id) ON DELETE SET NULL,
   minutes          INTEGER,
   tokens           INTEGER,
   meta             JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, created_at);
-CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
-CREATE INDEX IF NOT EXISTS idx_events_subject ON events(subject_user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_type ON audit_log(type, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_project ON audit_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_subject ON audit_log(subject_user_id);
 
 -- ---- cross-table FKs (added late so tables exist) ---------------------------
 -- Dollar-quoted DO blocks: needed because ADD CONSTRAINT has no IF NOT EXISTS.
@@ -337,7 +366,7 @@ NOT be used anywhere in this math.** Integer half-up expressions only:
 checkout(participation):                      # runs inside one tx, self/leader/close alike
   elapsed_seconds = (now - checked_in_at).total_seconds()
   minutes  = (int(elapsed_seconds) + 30) // 60          # actual elapsed, half-up — stored truthfully
-  credited = min(minutes, 2 * project.expected_minutes) # MINT CAP: forgotten checkouts
+  credited = min(minutes, 2 * event.expected_minutes)   # MINT CAP: forgotten checkouts
                                                         # cannot inflate the token supply (D6/D7)
   tokens   = (credited + 30) // 60                      # nearest hour, half-up; may be 0
   UPDATE participations SET checked_out_at = now, minutes = minutes, tokens_awarded = tokens
@@ -356,25 +385,33 @@ volunteers (flat rate is intent).
 |---|-----------|
 | I1 | `users.balance` = Σ entries in − Σ entries out for every user, always ≥ 0 |
 | I2 | `token_entries` is append-only: no UPDATE/DELETE code path exists — asserted by a static source check that only `app/tokens.py` writes the table (BUILD_PLAN M4) |
-| I3 | At most one open participation per (project, user) — enforced by partial unique index |
+| I3 | At most one open participation per (event, user) — enforced by partial unique index |
 | I4 | `minutes`/`tokens_awarded` are set exactly once, **atomically** with `checked_out_at` — the checkout UPDATE is guarded `… WHERE checked_out_at IS NULL`, so concurrent checkouts (double-tap / self-vs-leader / checkout-vs-close) mint once, never twice |
 | I5 | Waiver rows are never mutated; a text edit inserts version n+1 |
-| I6 | Every participation's `waiver_id` belongs to its `project_id` |
+| I6 | Every participation's `waiver_id` belongs to its event's `project_id` (waivers are project-scoped; check-in pins the event's project's current waiver) |
 | I7 | Claims only transition `pending → accepted/declined` (by poster) or `pending → canceled` (by claimant); `decided_at` stamped exactly then |
 | I8 | An accepted claim with price > 0 ↔ exactly one `spend` entry with that `claim_id`; declined/canceled claims have none |
 | I9 | Transfer with insufficient balance changes **nothing** (no entry, no balance drift) |
 | I10 | Only active, in-quantity `offer`s can be claimed (every offer is priced; 0 = free); quantity hits 0 → item `closed` |
-| I11 | Check-in requires the presented `checkin_code` to match an `open` project |
+| I11 | Check-in requires the presented `checkin_code` to match an `open` event |
 | I12 | Checkout math: the 29/30/89/90/150-minute boundaries **and** the mint cap (600 elapsed @ 120 expected → 4 tokens) above |
 
 ## Standard read shapes (used by API.md)
 
 - **user_public**: `id, display_name, bio, created_at` + stats (never the email)
   (`hours_volunteered` = Σ minutes/60 rounded to 1 decimal, `tokens_earned` =
-  Σ `earn` entries, `projects_joined` = count distinct closed participations'
-  projects). Balance is **private** (only in `/api/me`).
-- **project_card**: `id, title, location_text, starts_at, expected_minutes,
-  status, cover_image_id (primary image, else first by id, or null), checked_in_count, owner {id,
-  display_name}`.
+  Σ `earn` entries, `projects_joined` = count distinct **projects** across the
+  events of my closed participations). Balance is **private** (only in `/api/me`).
+- **project_card**: `id, title, cover_image_id` (primary image, else first by id,
+  or null)`, follower_count, event` — where `event` is ONE embedded **event_card**
+  (the soonest not-over event for `upcoming`, the most-recent for `past`) or
+  `null` (a project with no relevant event).
+- **event_card**: `id, starts_at, location_text, expected_minutes, status,
+  is_over` (per-event), `checked_in_count` + per-requesting-user state
+  `my_rsvp {is_leader}|null`, `my_open_participation {id, checked_in_at}|null`,
+  `my_hours_here` (batched by event id — no N+1).
+- **event_detail**: event_card + `checkin_code` (present **only** when the
+  requester leads the event's project). Used inside project detail, returned by
+  `POST /api/projects/{id}/events`, and by the event-scoped endpoints.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
   cover_image_id, poster {id, display_name}, created_at`.
