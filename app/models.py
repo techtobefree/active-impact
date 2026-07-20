@@ -284,7 +284,7 @@ class AuditLog(Base):
 class Image(Base):
     __tablename__ = "images"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    entity: Mapped[str] = mapped_column(Text, nullable=False)  # 'project' | 'catalog_item'
+    entity: Mapped[str] = mapped_column(Text, nullable=False)  # 'project' | 'catalog_item' | 'event'
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(Text, nullable=False)
     bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -293,7 +293,7 @@ class Image(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
-        CheckConstraint("entity IN ('project', 'catalog_item')", name="entity_valid"),
+        CheckConstraint("entity IN ('project', 'catalog_item', 'event')", name="entity_valid"),
         CheckConstraint("content_type IN ('image/jpeg', 'image/png', 'image/webp')", name="content_type_valid"),
         CheckConstraint("size > 0 AND size <= 10485760", name="size_bounds"),  # 10 MB
         Index("idx_images_entity", "entity", "entity_id"),

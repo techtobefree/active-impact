@@ -22,9 +22,11 @@ test.describe('Catalog', () => {
     await logoutUI(page);
     await registerUI(page, uemail('buy'), 'password123', 'Buyer');
     await page.goto('/#/catalog');
-    await expect(page.getByRole('link', { name: title })).toBeVisible();
+    // The whole card is now the link — clicking it (not a title anchor) navigates.
+    const card = page.locator('a.card', { hasText: title });
+    await expect(card).toBeVisible();
     await shot(page, testInfo, 'catalog-list-buyer');
-    await page.getByRole('link', { name: title }).click();
+    await card.click();
     await shot(page, testInfo, 'offer-detail-buyer');
     await page.getByRole('button', { name: /claim/i }).click();
     await expect(page.getByText(/pending/i)).toBeVisible();

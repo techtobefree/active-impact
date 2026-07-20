@@ -23,7 +23,7 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
         ├── token_entries              (append-only ledger: earn | tip | spend)
         ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
-        └── images                     (BYTEA, polymorphic: project | catalog_item)
+        └── images                     (BYTEA, polymorphic: project | catalog_item | event)
 ```
 
 Conceptual rules:
@@ -285,9 +285,11 @@ CREATE INDEX IF NOT EXISTS idx_claims_item     ON catalog_claims(item_id);
 -- COVER RULE: cover_image_id = the primary image, else the first by id
 --   (ORDER BY is_primary DESC, id ASC LIMIT 1) -- so deleting the primary falls
 --   back to the first remaining image.
+-- Polymorphic: an image attaches to a project, a catalog_item, OR an event. An
+-- event's images are managed by the leaders of the event's project.
 CREATE TABLE IF NOT EXISTS images (
   id           BIGSERIAL PRIMARY KEY,
-  entity       TEXT NOT NULL CHECK (entity IN ('project', 'catalog_item')),
+  entity       TEXT NOT NULL CHECK (entity IN ('project', 'catalog_item', 'event')),
   entity_id    INTEGER NOT NULL,
   content_type TEXT NOT NULL CHECK (content_type IN ('image/jpeg', 'image/png', 'image/webp')),
   bytes        BYTEA NOT NULL,
@@ -407,11 +409,14 @@ volunteers (flat rate is intent).
   (the soonest not-over event for `upcoming`, the most-recent for `past`) or
   `null` (a project with no relevant event).
 - **event_card**: `id, starts_at, location_text, expected_minutes, status,
-  is_over` (per-event), `checked_in_count` + per-requesting-user state
+  is_over` (per-event), `cover_image_id` (the event's own cover — primary image
+  else first by id, or null), `checked_in_count` + per-requesting-user state
   `my_rsvp {is_leader}|null`, `my_open_participation {id, checked_in_at}|null`,
   `my_hours_here` (batched by event id — no N+1).
-- **event_detail**: event_card + `checkin_code` (present **only** when the
-  requester leads the event's project). Used inside project detail, returned by
+- **event_detail**: event_card + `image_ids[]` (the event's images, entity
+  `'event'`, ordered by id) + `checkin_code` (present **only** when the requester
+  leads the event's project). Events may carry their own images (entity `'event'`);
+  the event's project leaders manage them. Used inside project detail, returned by
   `POST /api/projects/{id}/events`, and by the event-scoped endpoints.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
   cover_image_id, poster {id, display_name}, created_at`.

@@ -93,9 +93,12 @@ function actionEl(evt, onDone, { stopNav = false } = {}) {
 // (stopNav) despite the <a>. A project with no listable event shows a muted note.
 function projectCard(p) {
   const card = el(`<a class="card" href="#/projects/${p.id}" style="display:block"></a>`);
-  if (p.cover_image_id) {
+  // Prefer the EVENT's own cover (an event with photos shows its cover on the
+  // feed); fall back to the durable project cover.
+  const coverId = (p.event && p.event.cover_image_id) || p.cover_image_id;
+  if (coverId) {
     const cov = el('<img class="cover" alt="">');
-    apiBlobURL(`/images/${p.cover_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
+    apiBlobURL(`/images/${coverId}`).then((u) => { cov.src = u; }).catch(() => {});
     card.append(cov);
   }
   const body = el('<div></div>');
@@ -372,6 +375,12 @@ function eventRow(event, amLeader) {
   const render = (ev) => {
     clear(card);
     const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+    // A small leading thumbnail when the event has its own cover photo.
+    if (ev.cover_image_id) {
+      const th = el('<img class="thumb" alt="">');
+      apiBlobURL(`/images/${ev.cover_image_id}`).then((u) => { th.src = u; }).catch(() => {});
+      row.append(th);
+    }
     const left = el('<div class="grow" style="min-width:0"></div>');
     left.append(eventMeta(ev));
     if (ev.my_hours_here > 0 && !ev.is_over) {
@@ -465,9 +474,11 @@ export async function eventDetailView(eventId) {
   const project = ev.project || {};
 
   const root = el('<div class="stack"></div>');
-  if (project.cover_image_id) {
+  // Prefer the event's own cover; fall back to the durable project cover.
+  const coverId = ev.cover_image_id || project.cover_image_id;
+  if (coverId) {
     const cov = el('<img class="cover" alt="">');
-    apiBlobURL(`/images/${project.cover_image_id}`).then((u) => { cov.src = u; }).catch(() => {});
+    apiBlobURL(`/images/${coverId}`).then((u) => { cov.src = u; }).catch(() => {});
     root.append(cov);
   }
 
@@ -483,6 +494,11 @@ export async function eventDetailView(eventId) {
   top.append(cell);
   head.append(top);
   root.append(head);
+
+  // Event photos: leaders can add/remove/set the event cover right here.
+  if (ev.am_leader) {
+    root.append(imagesStrip('event', eventId, ev.image_ids, { canEdit: true, onChange: refresh, primaryId: ev.cover_image_id }));
+  }
 
   if (ev.am_leader) {
     root.append(el(`<a class="act primary block" href="#/events/${eventId}/lead">Manage event</a>`));
@@ -564,6 +580,10 @@ export async function leadView(eventId) {
   };
   qrCard.append(regen);
   root.append(qrCard);
+
+  // ---- photos ---- (leaders add/set-cover/delete this event's photos)
+  root.append(el('<div class="section-label">Photos</div>'));
+  root.append(imagesStrip('event', eventId, ev.image_ids, { canEdit: true, onChange: refresh, primaryId: ev.cover_image_id }));
 
   // ---- roster ----
   root.append(el(`<div class="section-label">Roster · ${esc(roster.checked_in_count)} on site</div>`));

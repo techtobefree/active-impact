@@ -169,6 +169,7 @@ def event_card(event: dict | None, state: dict) -> dict | None:
         "expected_minutes": event["expected_minutes"],
         "status": event["status"],
         "is_over": event_is_over(event),
+        "cover_image_id": cover_image_id("event", event["id"]),
         "checked_in_count": int(st["checked_in_count"]),
         "my_rsvp": st["my_rsvp"],
         "my_open_participation": st["my_open_participation"],
@@ -183,8 +184,19 @@ def event_detail(event: dict | None, state: dict, am_leader: bool) -> dict | Non
     event-scoped endpoints.
     """
     card = event_card(event, state)
-    if card is not None and am_leader:
-        card["checkin_code"] = event["checkin_code"]
+    if card is not None:
+        eid = event["id"]
+        card["cover_image_id"] = cover_image_id("event", eid)
+        card["image_ids"] = [
+            r["id"]
+            for r in db.query(
+                "SELECT id FROM images WHERE entity='event' AND entity_id=%s "
+                "ORDER BY id",
+                (eid,),
+            )
+        ]
+        if am_leader:
+            card["checkin_code"] = event["checkin_code"]
     return card
 
 

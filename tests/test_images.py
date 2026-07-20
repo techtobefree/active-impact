@@ -42,6 +42,12 @@ def _offer(client, title="Free Bike"):
     return r.json()
 
 
+def _first_event_id(client, project):
+    """The initial event created alongside a project (project detail lists events)."""
+    detail = client.get(f"/api/projects/{project['id']}").json()
+    return detail["events"][0]["id"]
+
+
 def _upload(client, entity, entity_id, content_type="image/png", data=TINY_B64,
             is_primary=None):
     body = {
@@ -326,3 +332,98 @@ def test_catalog_first_upload_primary_and_set(register):
 
     assert ca.post(f"/api/images/{second}/primary").status_code == 200
     assert ca.get(f"/api/catalog/{item['id']}").json()["cover_image_id"] == second
+
+
+# ---- event images -----------------------------------------------------------
+
+def test_event_leader_uploads_and_surfaces(register):
+    """A project leader may attach an image to one of the project's events; it
+    surfaces on GET /events/{id} (cover_image_id + image_ids) and in project detail."""
+    ca, a, _ = register("ev_leader_a")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+
+    r = _upload(ca, "event", eid)
+    assert r.status_code == 201, r.text
+    img = r.json()["id"]
+
+    ev = ca.get(f"/api/events/{eid}").json()
+    assert ev["cover_image_id"] == img
+    assert ev["image_ids"] == [img]
+
+    # Also surfaces on the event embedded in project detail.
+    detail = ca.get(f"/api/projects/{proj['id']}").json()
+    embedded = next(e for e in detail["events"] if e["id"] == eid)
+    assert embedded["cover_image_id"] == img
+    assert embedded["image_ids"] == [img]
+
+
+def test_event_non_leader_upload_forbidden(register):
+    ca, a, _ = register("ev_owner_b")
+    cb, b, _ = register("ev_stranger_b")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+
+    r = _upload(cb, "event", eid)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "not_a_leader"
+
+
+def test_event_upload_missing_event_forbidden(register):
+    ca, a, _ = register("ev_nobody_c")
+    r = _upload(ca, "event", 999999)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "not_a_leader"
+
+
+def test_event_set_primary_and_cover_follows(register):
+    ca, a, _ = register("ev_prim_d")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+    first = _upload(ca, "event", eid).json()["id"]
+    second = _upload(ca, "event", eid).json()["id"]
+
+    assert _is_primary(ca, first) is True
+    assert ca.get(f"/api/events/{eid}").json()["cover_image_id"] == first
+    assert ca.get(f"/api/events/{eid}").json()["image_ids"] == [first, second]
+
+    assert ca.post(f"/api/images/{second}/primary").status_code == 200
+    assert ca.get(f"/api/events/{eid}").json()["cover_image_id"] == second
+
+
+def test_event_set_primary_forbidden_for_stranger(register):
+    ca, a, _ = register("ev_prim_e")
+    cb, b, _ = register("ev_stranger_e")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+    img = _upload(ca, "event", eid).json()["id"]
+
+    r = cb.post(f"/api/images/{img}/primary")
+    assert r.status_code == 403
+    assert r.json()["detail"] == "not_a_leader"
+
+
+def test_event_delete_primary_falls_back(register):
+    ca, a, _ = register("ev_prim_f")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+    first = _upload(ca, "event", eid).json()["id"]
+    second = _upload(ca, "event", eid).json()["id"]
+
+    # first is primary; delete it -> cover falls back to the next by id.
+    assert ca.delete(f"/api/images/{first}").status_code == 204
+    ev = ca.get(f"/api/events/{eid}").json()
+    assert ev["cover_image_id"] == second
+    assert ev["image_ids"] == [second]
+
+
+def test_event_delete_by_stranger_forbidden(register):
+    ca, a, _ = register("ev_del_g")
+    cb, b, _ = register("ev_stranger_g")
+    proj = _project(ca)
+    eid = _first_event_id(ca, proj)
+    img = _upload(ca, "event", eid).json()["id"]
+
+    r = cb.delete(f"/api/images/{img}")
+    assert r.status_code == 403, r.text
+    assert ca.get(f"/api/images/{img}").status_code == 200

@@ -33,12 +33,15 @@ function posterLine(item) {
   return el(`<p class="small muted">by <a href="#/u/${esc(p.id)}">${esc(p.display_name)}</a></p>`);
 }
 
-// A list card: cover, linked title, status pill, price/need + quantity, poster.
+// A list card: the whole card is the link (like projectCard). Cover, plain title,
+// status pill, price/need + quantity, and the poster as PLAIN muted text (a nested
+// <a> inside the card <a> is invalid and would break the link — the poster stays a
+// real profile link only on the item DETAIL page).
 function listCardEl(item) {
-  const card = el('<div class="card"></div>');
+  const card = el(`<a class="card" href="#/catalog/${item.id}" style="display:block"></a>`);
   if (item.cover_image_id) card.append(coverEl(item.cover_image_id));
   const titleRow = el('<div class="row"></div>');
-  titleRow.append(el(`<h3 class="grow"><a href="#/catalog/${item.id}">${esc(item.title)}</a></h3>`));
+  titleRow.append(el(`<h3 class="grow">${esc(item.title)}</h3>`));
   titleRow.append(el(statusPill(item.status)));
   card.append(titleRow);
   const meta = el('<div class="row wrap"></div>');
@@ -46,8 +49,7 @@ function listCardEl(item) {
   const q = quantityTag(item);
   if (q) meta.append(q);
   card.append(meta);
-  const pl = posterLine(item);
-  if (pl) card.append(pl);
+  if (item.poster) card.append(el(`<p class="small muted">by ${esc(item.poster.display_name)}</p>`));
   return card;
 }
 

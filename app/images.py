@@ -30,7 +30,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB decoded (OVERVIEW.md Constants)
 # ---- request body -----------------------------------------------------------
 
 class ImageUpload(BaseModel):
-    entity: Literal["project", "catalog_item"]
+    entity: Literal["project", "catalog_item", "event"]
     entity_id: int
     content_type: str
     data_base64: str
@@ -44,6 +44,13 @@ def _may_manage(entity: str, entity_id: int, user_id: int) -> bool:
     if entity == "project":
         return db.query_one(
             "SELECT 1 FROM project_leaders WHERE project_id = %s AND user_id = %s",
+            (entity_id, user_id),
+        ) is not None
+    if entity == "event":
+        # A user may manage an event's images iff they lead the event's project.
+        return db.query_one(
+            "SELECT 1 FROM project_leaders pl JOIN events e "
+            "ON e.project_id = pl.project_id WHERE e.id = %s AND pl.user_id = %s",
             (entity_id, user_id),
         ) is not None
     # catalog_item
@@ -64,7 +71,7 @@ def upload_image(body: ImageUpload, user: dict = Depends(current_user)):
     # Only the owning entity's leader/poster may attach an image (covers a
     # missing entity too -- nobody manages a project/item that doesn't exist).
     if not _may_manage(body.entity, body.entity_id, user["id"]):
-        code = "not_a_leader" if body.entity == "project" else "not_yours"
+        code = "not_a_leader" if body.entity in ("project", "event") else "not_yours"
         raise api_error(403, code)
 
     if body.content_type not in ALLOWED_CONTENT_TYPES:
@@ -121,7 +128,7 @@ def set_primary(image_id: int, user: dict = Depends(current_user)):
     if not row:
         raise api_error(404, "not_found")
     if not _may_manage(row["entity"], row["entity_id"], user["id"]):
-        code = "not_a_leader" if row["entity"] == "project" else "not_yours"
+        code = "not_a_leader" if row["entity"] in ("project", "event") else "not_yours"
         raise api_error(403, code)
     with db.tx() as c:
         c.execute(

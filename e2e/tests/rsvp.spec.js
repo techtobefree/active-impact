@@ -227,4 +227,30 @@ test.describe('RSVP flow', () => {
     await shot(page, testInfo, 'switched-cover');
     await expectNoGenericError(page);
   });
+
+  test('event images: a leader uploads a photo from the lead hub; it becomes the event cover', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('evimg'), 'password123', 'Event Photo Lead');
+    const title = 'E2E Event Photo ' + uname();
+    await createProject(page, title, dtLocal(7)); // seeds the first event
+
+    // Into the event lead hub via the event row's Manage link.
+    await page.getByRole('link', { name: /^manage$/i }).click();
+    await expect(page).toHaveURL(/#\/events\/(\d+)\/lead$/);
+    const eventId = page.url().match(/events\/(\d+)\/lead/)[1];
+
+    // Upload a photo from the lead hub's Photos section.
+    await expect(page.getByText(/^Photos$/)).toBeVisible();
+    await page.locator('input[type=file]').setInputFiles({ name: 'event.png', mimeType: 'image/png', buffer: PNG_1x1 });
+
+    // First photo auto-becomes the event cover → a ★ primary badge on the thumb.
+    await expect(page.locator('.primary-badge')).toHaveCount(1);
+    await shot(page, testInfo, 'event-photo-cover');
+    await expectNoGenericError(page);
+
+    // On the event detail, that event cover renders full-width.
+    await page.goto(`/#/events/${eventId}`);
+    await expect(page.locator('img.cover')).toBeVisible();
+    await shot(page, testInfo, 'event-detail-cover');
+    await expectNoGenericError(page);
+  });
 });
