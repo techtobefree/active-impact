@@ -14,13 +14,14 @@ test.describe('Auth (email + password)', () => {
     await expect(fieldError(page, 'email')).not.toContainText(/something went wrong/i);
     await expect(fieldError(page, 'password')).toHaveCount(0); // no cross-field noise
 
-    // Short password -> under the PASSWORD field, with the reason.
+    // 1-char minimum means no "too short" case, but a password with an edge space
+    // is still flagged live under the PASSWORD field.
     await page.locator('input[name=email]').fill(uemail('a'));
     await page.locator('input[name=display_name]').fill('Test Person');
-    await page.locator('input[name=password]').fill('short');
+    await page.locator('input[name=password]').fill(' spacey');
     await page.getByRole('button', { name: /create account/i }).click();
-    await expect(fieldError(page, 'password')).toContainText(/8 characters/);
-    await shot(page, testInfo, 'short-password-under-field');
+    await expect(fieldError(page, 'password')).toContainText(/space/i);
+    await shot(page, testInfo, 'space-password-under-field');
     await expect(fieldError(page, 'email')).toHaveCount(0);
 
     await expectNoGenericError(page);

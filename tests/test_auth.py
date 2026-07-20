@@ -116,8 +116,9 @@ def test_validation_bounds(api):
     # 254 chars exactly is accepted
     local = "x" * (254 - len("@example.com"))
     assert reg(f"{local}@example.com").status_code == 201
-    # password bounds
-    assert reg("shortpw@example.com", password="short").status_code == 422
+    # password bounds: empty is rejected, a single character is now accepted
+    assert reg("emptypw@example.com", password="").status_code == 422
+    assert reg("onecharpw@example.com", password="x").status_code == 201
     assert reg("longpw@example.com", password="x" * 73).status_code == 422
     # display_name bounds: blank and >60 are rejected, 60 exactly is fine
     assert reg("dn1@example.com", display_name="   ").status_code == 422

@@ -46,10 +46,10 @@ function renderAuth(isLogin) {
             if (chars > 60) return 'At most 60 characters.';
             return null;
           } },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'at least 8 characters',
+        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'your password',
           validate: (v) => {
             const chars = [...v].length; // code points — what the server counts
-            if (chars < 8) return `At least 8 characters (this has ${chars}).`;
+            if (chars < 1) return 'Password is required.';
             if (chars > 72) return 'At most 72 characters.';
             if (v !== v.trim()) return 'Starts or ends with a space — that’s easy to mistype later. Remove it.';
             return null;
