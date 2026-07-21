@@ -1,6 +1,6 @@
 # API Contract
 
-> The complete HTTP surface — 43 endpoints. JSON only, same-origin, no CORS
+> The complete HTTP surface — 52 endpoints. JSON only, same-origin, no CORS
 > middleware. Conventions first, then every endpoint. Field constraints live in
 > OVERVIEW.md § Constants; read shapes in DOMAIN.md § Standard read shapes.
 > A **project** is the durable service project; an **event** is one occurrence of
@@ -11,8 +11,12 @@
 - **Base path** `/api`. Success returns the bare object/array (no envelope);
   create returns **201** with the created resource; delete/logout return **204**.
 - **Auth**: `Authorization: Bearer <token>` on every endpoint **except**
-  `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/health`.
-  Missing/invalid/expired token → **401** `{"detail": "auth_required" | "invalid_token"}`.
+  `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/guest`,
+  `GET /api/health`. Missing/invalid/expired token → **401**
+  `{"detail": "auth_required" | "invalid_token"}`. Everyone (even a first-time
+  visitor) holds a token: a **guest** is a `users` row with `email IS NULL`
+  (SERVICE_LOG.md §4), minted by `POST /api/auth/guest`, reusing the whole session
+  path. `POST /api/auth/guest` may optionally carry a token (returns it if valid).
 - **Errors**: `{"detail": "<snake_case_code>"}`. Codes are machine-readable and
   stable; the frontend maps them to friendly text. FastAPI's native **422**
   validation shape is accepted as-is for malformed bodies.
@@ -28,9 +32,12 @@
 |---|---|---|
 | `POST /api/auth/register` | `{email, password, display_name}` → **201** `{token, user}` (auto-login; email lowercased/trimmed; `display_name` **required** — the public identity) | 409 `email_taken`; 422 pattern/length |
 | `POST /api/auth/login` | `{email, password}` → `{token, user}` (also deletes this user's expired sessions — D19) | 401 `invalid_credentials` (same code whether the account exists or not) |
+| `POST /api/auth/guest` | — → **201** `{token, user}`. Silently create an anonymous account (`email`/`password_hash` NULL) with an auto "Adjective Animal" handle + session. **No auth required.** Idempotent-ish: if a still-valid token is presented, that same `{token, user}` is returned (no spare guest) | — |
+| `POST /api/auth/convert` | `{email, password, display_name?}` → `{token, user}`. **Authed as the guest** (D7 / §4). `email` **free** → attach email/password(+display_name) to this same guest row (same id, records intact); `email` **taken** → verify the existing account's password, MERGE the guest's records/cheers/reports into it, retire the guest, return a session for the **existing** account. Reuses RegisterIn validators | 401 `invalid_credentials` (taken email, wrong password); 409 `not_a_guest` (a real account may not convert); 409 `email_taken` (lost a create race); 422 email/password shape |
 | `POST /api/auth/logout` | — → **204** (deletes the presented session row) | — |
 
-`user` here = `/api/me` shape below. bcrypt via the `bcrypt` package;
+`user` here = `/api/me` shape below (it now also carries `is_guest`). A guest's
+`email` is `null`; `balance` is `0`. bcrypt via the `bcrypt` package;
 `bcrypt.checkpw` on login. Token = `secrets.token_hex(32)`, expiry now+30 days.
 The `current_user` FastAPI dependency resolves token → session (unexpired) → user
 and injects it into every protected handler.
@@ -39,7 +46,7 @@ and injects it into every protected handler.
 
 | Endpoint | → Response | Errors |
 |---|---|---|
-| `GET /api/me` | `{id, email, display_name, bio, balance, created_at}` (email appears **only** here) | — |
+| `GET /api/me` | `{id, email, display_name, bio, balance, created_at, is_guest}` (email appears **only** here; `is_guest` = `email IS NULL`; a guest's email is JSON `null`) | — |
 | `PATCH /api/me` | body `{display_name?, bio?}` → updated me (bumps `updated_at`) | 422 |
 | `GET /api/users/{user_id}` | **user_public** (includes stats; NO balance, NO email) | 404 |
 
@@ -122,11 +129,35 @@ prices the offer in tokens and is **paid by claimants** — the catalog never
 system-mints. Minting is exclusive to project checkout (D7); a time-and-place
 charity session can instead be posted as a *project* to earn via check-in.
 
+## Service records — `app/records.py`
+
+The anonymous-first social log (SERVICE_LOG.md): one record = one photo + one
+caption, authored by whoever you currently are (guest or real). Standalone — it
+creates no participations, moves no tokens, and links to no project/event. All
+endpoints require a token (a guest's counts). Returns **record_card**
+(`id, author {id, display_name, is_guest}, caption, photo_image_id, created_at,
+cheer_count, i_cheered`) — the author **never** exposes an email.
+
+| Endpoint | Notes | Errors |
+|---|---|---|
+| `POST /api/service_records` | `{caption, content_type, data_base64}` → **201** record_card. One tx: insert the record, then its photo (`entity='service_record'`, `is_primary`). Caption 1–280 (stripped); photo reuses the 10 MB / content-type gate. Rate-limited to ≤ 20 records / author / hour | 422 `bad_content_type`; 413 `image_too_large`; 429 `rate_limited` |
+| `GET /api/service_records` 📄 | `?scope=all` (default, global feed) `\|mine` (the caller's own). Newest-first, **excludes `hidden`**. `cheer_count` + `i_cheered` batched by record id (no N+1) | — |
+| `GET /api/service_records/{id}` | → record_card (share target / detail) | 404 `not_found` (absent **or** hidden) |
+| `DELETE /api/service_records/{id}` | **Author only** → **204**. Cascades cheers/reports (FK); the polymorphic image is removed in the same tx | 403 `not_yours`; 404 |
+| `POST /api/service_records/{id}/cheer` | Add my 🙌. Idempotent (`ON CONFLICT DO NOTHING`) → `{cheered: true, cheer_count}` | 404 |
+| `DELETE /api/service_records/{id}/cheer` | Remove my 🙌. Idempotent → `{cheered: false, cheer_count}` | 404 |
+| `POST /api/service_records/{id}/report` | `{reason?}` → **204**. Idempotent per user (`UNIQUE(record_id,user_id)`). At **3 distinct** reporters the record auto-sets `hidden=true` (dropped from all feeds). Guests may report | 404 |
+
+**Moderation is MVP-light (a known gap, §9):** report + `hidden` flag + author
+delete; no admin UI yet (unhide is a manual DB flag). The 10 MB image cap, the
+content-type allowlist, the caption cap, and the per-hour rate limit are the spam
+floor.
+
 ## Images — `app/images.py`
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `POST /api/images` | `{entity: 'project'\|'catalog_item'\|'event', entity_id, content_type, data_base64, is_primary?}` → **201** `{id}`. Only that entity's leader/poster may upload — for an `event`, the leaders of the event's project (403 `not_a_leader`). Decoded size ≤ 10 MB. **Cover:** if the entity has no primary yet the new image becomes primary automatically; `is_primary:true` force-sets it (unsetting the others in one tx). An event's cover = its primary else first by id | 403; 413 `image_too_large`; 422 `bad_content_type` |
+| `POST /api/images` | `{entity: 'project'\|'catalog_item'\|'event'\|'service_record', entity_id, content_type, data_base64, is_primary?}` → **201** `{id}`. Only that entity's manager may upload — a project/event's **leader** (403 `not_a_leader`), a catalog item's **poster** or a service record's **author** (403 `not_yours`). Decoded size ≤ 10 MB. **Cover:** if the entity has no primary yet the new image becomes primary automatically; `is_primary:true` force-sets it (unsetting the others in one tx). Usually not called directly for a record — `POST /api/service_records` attaches the photo in one shot | 403; 413 `image_too_large`; 422 `bad_content_type` |
 | `GET /api/images/{id}` | Raw bytes, correct `Content-Type`, `Cache-Control: private, max-age=86400`. Auth required (D12) — frontend fetches with Bearer + blob URL | 404 |
 | `POST /api/images/{id}/primary` | Entity leader/poster only. Sets this image as the entity's cover and unsets the others in one tx → `{id, entity, entity_id, is_primary}` | 403; 404 |
 | `DELETE /api/images/{id}` | Uploader or entity leader/poster → **204** (hard delete — nothing references image rows). Deleting the primary is fine — the cover falls back to the first remaining by id | 403; 404 |
@@ -141,9 +172,10 @@ charity session can instead be posted as a *project* to earn via check-in.
 
 | Actor on resource | May |
 |---|---|
-| Any authed user | Browse everything; create projects (with a first event); check in via a valid code; RSVP/self check-in to an event; check **self** out; tip; claim offers; edit own profile |
+| Any authed user (incl. **guest**) | Browse everything; create projects (with a first event); check in via a valid code; RSVP/self check-in to an event; check **self** out; tip; claim offers; edit own profile; **log service records, cheer, and report** |
 | Project **leader** (incl. owner) | All project edits, add events, and per-event QR/code/roster/close, check out anyone there, event-leader designation; add/remove leaders; project images |
 | Project **owner** | Leader powers; irremovable as leader |
 | Item **poster** | Edit/close item, accept/decline claims, item images |
+| Record **author** | Delete own service record, manage its image |
 | Claimant | Cancel own pending claim |
 | **Nobody** | Mutate ledger entries, waiver rows, others' profiles (no admin exists in MVP — D-deferred) |

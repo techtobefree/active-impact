@@ -58,14 +58,21 @@ async function registerUI(page, email, password = 'password123', displayName = '
   await page.locator('input[name=display_name]').fill(displayName); // required — public identity
   await page.locator('input[name=password]').fill(password);
   await page.getByRole('button', { name: /create account/i }).click();
-  await expect(page.locator('#nav')).toBeVisible(); // signed in -> chrome appears
+  // A successful convert navigates home; the nav is ALWAYS visible now (guest-first),
+  // so it's no longer a "done" signal — wait for the landing instead.
+  await expect(page).toHaveURL(/#\/$/);
 }
 
+// Sign in on the guest-first CONVERT screen. With an existing email + the right
+// password this MERGES the throwaway guest into that account (SERVICE_LOG.md §4);
+// the single submit button is "Create account".
 async function loginUI(page, email, password = 'password123') {
   await page.goto('/#/login');
   await page.locator('input[name=email]').fill(email);
   await page.locator('input[name=password]').fill(password);
-  await page.getByRole('button', { name: /^sign in$/i }).click();
+  await page.getByRole('button', { name: /create account/i }).click();
+  // Convert (attach a new email OR sign-in-merge an existing one) lands on the feed.
+  await expect(page).toHaveURL(/#\/$/);
 }
 
 async function logoutUI(page) {

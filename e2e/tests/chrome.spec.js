@@ -14,17 +14,19 @@ test.describe('Chrome (top bar + bottom nav)', () => {
     await expect(topbar).toBeVisible();
 
     // Click every tab in turn (hashchange, no reload) — asserting after EACH hop,
-    // because the bug flipped the chrome on alternate navigations.
+    // because the bug flipped the chrome on alternate navigations. Selected by
+    // data-tab: the 5-item bar (Home/Projects/Catalog/Wallet/Me) has overlapping
+    // words ("Home" contains "me"), so a name regex would be ambiguous.
     const hops = [
-      [/catalog/i, /#\/catalog$/],
-      [/wallet/i, /#\/wallet$/],
-      [/me/i, /#\/me$/],
-      [/projects/i, /#\/$/],
-      [/catalog/i, /#\/catalog$/],
-      [/wallet/i, /#\/wallet$/],
+      ['projects', /#\/projects$/],
+      ['catalog', /#\/catalog$/],
+      ['wallet', /#\/wallet$/],
+      ['me', /#\/me$/],
+      ['home', /#\/$/],
+      ['catalog', /#\/catalog$/],
     ];
-    for (const [name, urlRe] of hops) {
-      await page.locator('#nav').getByRole('link', { name }).click();
+    for (const [tab, urlRe] of hops) {
+      await page.locator(`#nav a[data-tab="${tab}"]`).click();
       await expect(page).toHaveURL(urlRe);
       await expect(nav, `nav hidden after navigating to ${urlRe}`).toBeVisible();
       await expect(topbar, `top bar hidden after navigating to ${urlRe}`).toBeVisible();

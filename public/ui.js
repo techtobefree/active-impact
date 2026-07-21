@@ -88,6 +88,8 @@ const ERRORS = {
   price_on_need: "Needs don't have a price.",
   image_too_large: 'Image is too large (max 10 MB).',
   bad_content_type: 'Only JPEG, PNG or WebP images.',
+  rate_limited: 'You’re posting a bit fast — take a short break and try again.',
+  not_a_guest: 'You already have an account.',
 };
 export function errMessage(e) {
   if (e && e.offline) return ERRORS.offline;

@@ -51,8 +51,12 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(Text, nullable=False)  # lowercased, private -- never in public shapes
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)  # bcrypt
+    # email/password_hash are NULLABLE: a guest is a users row with both NULL
+    # (email IS NULL ⇔ guest -- SERVICE_LOG.md §4). Real accounts require both,
+    # enforced in the auth handlers, not the columns. The unique lower(email)
+    # index is unaffected -- Postgres treats NULLs as distinct, so guests coexist.
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)  # lowercased, private -- never in public shapes
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)  # bcrypt
     display_name: Mapped[str] = mapped_column(Text, nullable=False)  # public identity (1-60 chars, non-unique)
     bio: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     balance: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")  # cached ledger sum
@@ -284,7 +288,7 @@ class AuditLog(Base):
 class Image(Base):
     __tablename__ = "images"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    entity: Mapped[str] = mapped_column(Text, nullable=False)  # 'project' | 'catalog_item' | 'event'
+    entity: Mapped[str] = mapped_column(Text, nullable=False)  # 'project' | 'catalog_item' | 'event' | 'service_record'
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(Text, nullable=False)
     bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -293,8 +297,56 @@ class Image(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
-        CheckConstraint("entity IN ('project', 'catalog_item', 'event')", name="entity_valid"),
+        CheckConstraint("entity IN ('project', 'catalog_item', 'event', 'service_record')", name="entity_valid"),
         CheckConstraint("content_type IN ('image/jpeg', 'image/png', 'image/webp')", name="content_type_valid"),
         CheckConstraint("size > 0 AND size <= 10485760", name="size_bounds"),  # 10 MB
         Index("idx_images_entity", "entity", "entity_id"),
+    )
+
+
+# ---- service log (anonymous-first social log) -------------------------------
+# A standalone layer (SERVICE_LOG.md): one record = one photo + one caption,
+# authored by whoever you currently are (guest or real). It touches no tokens,
+# participations, projects, or the ledger. Its photo reuses the polymorphic
+# images table (entity='service_record'); cheers/reports drive light moderation.
+
+
+class ServiceRecord(Base):
+    """A single logged act of service: one photo + one caption, standalone."""
+    __tablename__ = "service_records"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # author (guest or real)
+    caption: Mapped[str] = mapped_column(Text, nullable=False)  # 1-280 chars (validated in the handler)
+    hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")  # moderation (§9)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        Index("idx_service_records_created", text("created_at DESC")),
+        Index("idx_service_records_user", "user_id"),
+    )
+
+
+class Cheer(Base):
+    """One 🙌 per user per record. Toggle = insert / delete."""
+    __tablename__ = "cheers"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    record_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_records.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        # UNIQUE also provides the (record_id, user_id) composite index the feed
+        # counts + the auto-hide DISTINCT count read through.
+        UniqueConstraint("record_id", "user_id", name="uq_cheer"),
+    )
+
+
+class Report(Base):
+    """Moderation-light: N=3 distinct reporters auto-hide a record (§9)."""
+    __tablename__ = "reports"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    record_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_records.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # reporter
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("record_id", "user_id", name="uq_report"),
     )

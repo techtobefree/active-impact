@@ -23,6 +23,7 @@ from app.checkin import router as checkin_router
 from app.tokens import router as tokens_router
 from app.catalog import router as catalog_router
 from app.images import router as images_router
+from app.records import router as records_router
 
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 
@@ -83,6 +84,7 @@ api.include_router(checkin_router)
 api.include_router(tokens_router)
 api.include_router(catalog_router)
 api.include_router(images_router)
+api.include_router(records_router)
 
 app.include_router(api)
 

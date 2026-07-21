@@ -41,6 +41,15 @@ export async function api(path, opts = {}) {
     throw { offline: true, detail: 'offline' };
   }
   if (res.status === 401) {
+    // Auth-challenge endpoints (convert / login) return 401 to mean "wrong
+    // credentials", NOT "your session died" — even though a guest bearer token
+    // rides along. Surface the server detail without nuking the guest session so
+    // the user can simply retry the password.
+    if (opts.authChallenge) {
+      let detail = 'unauthorized';
+      try { const d = await res.json(); if (d && d.detail) detail = d.detail; } catch { /* keep default */ }
+      throw { status: 401, detail };
+    }
     // A 401 WITH a bearer token = the session expired. Clear it and stash the
     // route, but DON'T navigate here: a submit-time expiry would wipe whatever
     // the user has typed. The error surfaces in place ("Your session expired"),

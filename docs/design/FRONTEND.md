@@ -15,8 +15,9 @@ public/
 ├── app.js                  # boot, hash router, chrome/nav state, SW registration
 ├── api.js                  # api() fetch helper — Bearer header, 401 redirect, 204→null
 ├── ui.js                   # el(), esc(), fmt helpers, addForm(), imagesStrip(), install flow
-├── views/auth.js           # login + register screens
-├── views/projects.js       # feed, project detail (+ its events), create, event detail, per-event lead hub (QR + roster)
+├── views/auth.js           # the single CONVERT ("save your log / sign in") screen
+├── views/records.js        # service log: feed-home, log (photo + caption), record detail
+├── views/projects.js       # projects list (#/projects), project detail (+ its events), create, event detail, per-event lead hub (QR + roster)
 ├── views/checkin.js        # the #/c/{code} landing: waiver → I agree → checked-in state
 ├── views/catalog.js        # list (offers|needs tabs), detail, create/edit, claims
 ├── views/wallet.js         # balance, ledger, my claims (both roles), tip form
@@ -35,9 +36,12 @@ Hash-based so no server fallback is needed and QR URLs deep-link on any phone:
 ```js
 // app.js — route table maps location.hash to view functions
 const routes = [
-  [/^#\/$/,                    views.projectList],
-  [/^#\/login$/,               views.login],       // public
-  [/^#\/register$/,            views.register],    // public
+  [/^#\/$/,                    views.feed],        // HOME = the service feed
+  [/^#\/log$/,                 views.log],         // log a service (photo + caption)
+  [/^#\/r\/(\d+)$/,            views.record],      // one record (share / deep link)
+  [/^#\/login$/,               views.convert, AUTH],   // "save your log / sign in"
+  [/^#\/register$/,            views.convert, AUTH],   // same convert screen
+  [/^#\/projects$/,            views.projectList], // the projects list (was home)
   [/^#\/projects\/new$/,       views.projectNew],
   [/^#\/projects\/(\d+)$/,     views.projectDetail],  // durable project + its events
   [/^#\/events\/(\d+)$/,       views.eventDetail],    // one occurrence (optional deep link)
@@ -54,18 +58,28 @@ const routes = [
 window.addEventListener('hashchange', render);
 ```
 
-**Auth gating & return-to (critical for the QR flow):** if a protected route is
-hit without a token, stash it — `sessionStorage.setItem('ai_return',
-location.hash)` — and go to `#/login`. After successful login/register, navigate
-to the stashed hash (else `#/`). So: *scan QR → register → land back on the
-waiver screen.* Test this path explicitly.
+**Always signed in (SERVICE_LOG.md §4/§7).** On boot, if there is no `ai_token`,
+`POST /auth/guest` mints a silent GUEST session BEFORE the first render — so every
+route is authed. A brand-new guest (a first run) lands on `#/log`; a returning
+token renders the feed. Sign-out drops back to a fresh guest.
+
+**Auth gating & return-to (critical for the QR flow):** a GUEST token counts as
+authed, so protected routes never bounce to the convert screen. The `AUTH` routes
+(`#/login`, `#/register`) render the convert form for a guest and redirect a REAL
+(non-guest) user home. If a truly token-less edge hits a protected route, stash it
+— `sessionStorage.setItem('ai_return', location.hash)` — and go to `#/login`; on a
+successful convert, navigate to the stashed hash (else `#/`). So: *scan QR →
+save account → land back on the waiver screen.* Test this path explicitly.
 
 ## Screens
 
 | Route | Content & API calls |
 |---|---|
-| `#/login`, `#/register` | **Email + password** (register also requires Display name — the public identity). `autocomplete`/`inputmode=email` attrs; live field-attributed validation. On success: store `ai_token`/`ai_user` in localStorage → return-to. Link between the two |
-| `#/` **Feed** | Project cards (`GET /projects?scope=`), each **embedding one event** (`p.event`, the soonest not-over / most-recent occurrence): cover on top (**prefers the event's own cover** `p.event.cover_image_id` — an event with photos shows its own cover — else the durable project cover), then a **details-left / action-right** row — project title (`<h3>`) on the left, and if `p.event` the embedded event's 📍 location, 🗓 local time, ⏱ expected duration, checked-in count under it; the **right column** is a right-aligned stack: the event **status pill on top**, then the **shared RSVP / check-in / check-out action** (`actionEl(p.event)`, per-user state on the event) below it. The button acts **in place** (stops the card's `<a>` navigation, refreshes just that card via `GET /events/:id` so the current tab + scroll survive). `p.event == null` (a past project with no listable event) → muted "No upcoming events", no action. Upcoming excludes ended events (they fall to Past). Client + `q` search. "＋ New service project". Tabs: Upcoming · Past · Mine |
+| `#/login`, `#/register` **Convert** | ONE "save your log / sign in" form — **email + password + optional display name** (`POST /auth/convert`, authed as the current guest). `autocomplete`/`inputmode=email` attrs; live field-attributed validation. A NEW email attaches (guest → real, same id + records); an EXISTING email + right password **merges** the guest into it; wrong password → 401 shown as "Wrong email or password" (the guest session survives — retry in place). On success: `setSession` → `refreshMe` → return-to. A real (non-guest) user is redirected to `#/`. Reused by the Me "create account" card |
+| `#/` **Feed (home)** | The service log (`GET /service_records?scope=all` 📄). Photo-forward cards: big photo (`apiBlobURL` of `photo_image_id`, taps through to `#/r/:id`), caption, author `avatarEl` + handle (→ `#/u/:id`), relative time, a **🙌 cheer** toggle + count (`POST`/`DELETE …/cheer`, optimistic then reconciled), and a **"⋯"** menu (Report anyone; Delete if `author.id === me.id`). "Load more" via `limit`/`offset`. Empty state invites the first log. A persistent **＋ Log** FAB + a top "＋ Log a service" button → `#/log` |
+| `#/log` **Log a service** | Photo picker first (hidden `<input type=file accept="image/*">` — **no `capture` attr** — → `resizeImage` → JPEG base64 + preview), a required caption `<textarea maxlength=280>` (remaining counter), one **Post** button (enabled only once a photo AND caption exist — C2) → `POST /service_records {caption, content_type:'image/jpeg', data_base64}` → land on `#/` with the new record on top (toast). Cancel → `#/` |
+| `#/r/:id` **Record** | Single record (`GET /service_records/:id`) — the same card, larger: cheer, report, delete-if-mine, author link, ← back to the feed. 404 → friendly "not here anymore" + a link home |
+| `#/projects` **Projects list** | Project cards (`GET /projects?scope=`), each **embedding one event** (`p.event`, the soonest not-over / most-recent occurrence): cover on top (**prefers the event's own cover** `p.event.cover_image_id` — an event with photos shows its own cover — else the durable project cover), then a **details-left / action-right** row — project title (`<h3>`) on the left, and if `p.event` the embedded event's 📍 location, 🗓 local time, ⏱ expected duration, checked-in count under it; the **right column** is a right-aligned stack: the event **status pill on top**, then the **shared RSVP / check-in / check-out action** (`actionEl(p.event)`, per-user state on the event) below it. The button acts **in place** (stops the card's `<a>` navigation, refreshes just that card via `GET /events/:id` so the current tab + scroll survive). `p.event == null` (a past project with no listable event) → muted "No upcoming events", no action. Upcoming excludes ended events (they fall to Past). Client + `q` search. "＋ New service project". Tabs: Upcoming · Past · Mine |
 | `#/projects/new` | `addForm` → `POST /projects` (creates the project **and its first event**): title, description, location, starts_at (`<input type="datetime-local">` → ISO), expected minutes, waiver textarea **left blank → server seeds the default template** (placeholder text says so; template lives server-side only — no client copy to drift) + banner: *"Blank uses our standard template — not legal advice. Edit to fit your project."* Location/starts_at hints note they seed the first event |
 | `#/projects/:id` | **Service project** detail (`GET /projects/:id`): primary-image cover at top, images strip (★ marks the cover; leaders get "Make primary"), title (`<h1>`) + description, a **Share · Follow · Invite** row (every signed-in viewer, three equal `.act` buttons) + a muted follower count — Share uses `navigator.share` (else copies the link + toast); Follow toggles `POST`/`DELETE /projects/:id/follow` (`{is_following, follower_count}`) and repaints the button (✓ Following + `.primary`) and count in place; Invite is a "coming soon" toast. `am_leader` → **Edit project** (title/description/waiver via `PATCH /projects/:id`). **Organizers** section (→ profiles); `am_leader` adds by email (`POST /projects/:id/leaders`) / removes by ✕ (`DELETE …/leaders/:uid`, owner irremovable — project_leaders are project-wide). Waiver (collapsed `<details>`). Then an **Events** section listing `p.events` (upcoming ASC, then past DESC): each event is a card with (if it has its own cover) a small leading `.thumb`, its 📍🗓⏱👥 meta + "You've logged Nh here" on the left and the **status pill + shared action** (`actionEl(event)`, refreshes that row via `GET /events/:id`) on the right, plus (`am_leader`) a **Manage** link → `#/events/:id/lead`. `am_leader` also gets a **＋ Add event** control (a small form: starts_at, location, expected_minutes → `POST /projects/:id/events` → refresh) |
 | `#/events/:id` | Optional per-event deep link (`GET /events/:id`): cover at top (**event's own cover** `ev.cover_image_id` else project cover) + title, that event's meta, status pill + shared `actionEl(event)`, waiver (collapsed), (`am_leader`) an **images strip** for the event's photos (★ marks the event cover) + a **Manage event** link → `#/events/:id/lead`, and a link back to the service project |
@@ -76,7 +90,7 @@ waiver screen.* Test this path explicitly.
 | `#/catalog/:id` | Detail + role-aware actions. Viewer on offer: **Claim (N 🪙)** / claim status chip (pending→Cancel; accepted→"show this screen as proof"). Viewer on need: **Tip** (tip form, `catalog_item_id` attached). Poster: edit/close, **image upload via `imagesStrip` (poster only** — the food example needs a photo**)**, pending claims list with **Accept / Decline** (accept errors surface `insufficient_balance` as "claimant doesn't have enough tokens yet") |
 | `#/wallet` | Balance hero (🪙 big number), **Tip tokens** (recipient **email**, amount, note), ledger list (`direction` arrows, counterparty display name, note, kind chip, local time), claims section: *mine* + *on my items* with pending-action rows |
 | `#/u/:id` | Public profile: initials avatar (deterministic bg), display name, bio, joined; stats row: ⏱ hours · 🪙 earned · 📋 projects. **Tip** button (tips by `to_user_id`) |
-| `#/me` | Own profile + edit (display_name, bio) + logout. Install-app button lives here too |
+| `#/me` | **Guest** (`me.is_guest`): the auto-handle + avatar, a **Rename** form (`PATCH /me {display_name}`), and a prominent **"Create an account to save your service"** card → the convert form (email + password + optional display name → `POST /auth/convert`; on success toast + re-render as a real profile). **Real**: profile summary (email — "only you can see this" — + balance) + edit (display_name, bio) + **Sign out** (clears the session, drops back to a fresh guest). Both keep the **Dark mode** toggle + Install-app button |
 
 Empty states are one-line muted guidance (home-keep pattern): *"No projects yet.
 Post the first one."* · *"Nothing in your ledger yet — volunteer an hour to earn
@@ -109,8 +123,10 @@ execute. Add one regression test-page check to manual verification: register as
   (dark bg `#141613`, card `#1e211d`, ink `#e8eae6`).
 - Mobile-first single column, `main { max-width: 640px; margin: 0 auto }`,
   sticky top bar, `viewport-fit=cover` + safe-area padding.
-- Bottom **tab nav** (fixed, 4 tabs): 🌱 Projects · 🎁 Catalog · 🪙 Wallet ·
-  👤 Me. Emoji are the entire icon system for MVP.
+- Bottom **tab nav** (fixed, 5 tabs): 🏠 Home (the service feed) · 🌱 Projects ·
+  🎁 Catalog · 🪙 Wallet · 👤 Me. Emoji are the entire icon system for MVP. A
+  distinct always-visible **＋ Log** floating action button sits over the feed
+  (and a record) → `#/log`; it is not one of the tabs.
 - Class vocabulary: `.card .row .grow .muted .pill .tag .act .primary .ghost .del`.
   Status pills: open=green, completed=muted, pending=amber, declined/closed=red.
 - **Vertical rhythm**: a view that mounts several siblings wraps them in a single

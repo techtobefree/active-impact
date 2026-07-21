@@ -10,7 +10,9 @@ function dtLocal(days) {
 }
 
 // POST /projects seeds the project AND its FIRST event, then lands on the detail.
+// The projects list now lives at #/projects (the home feed is the service log).
 async function createProject(page, title, startsLocal) {
+  await page.goto('/#/projects');
   await page.getByRole('link', { name: /new service project/i }).click();
   await page.locator('input[name=title]').fill(title);
   await page.locator('input[name=location_text]').fill('Riverside Park');
@@ -78,25 +80,25 @@ test.describe('RSVP flow', () => {
     const title = 'E2E Feed Action ' + uname(); // unique so the feed card is unambiguous across runs
     await createProject(page, title, dtLocal(7)); // future → live, never "over"
 
-    // Back to the feed (Upcoming).
-    await page.goto('/#/');
-    await expect(page).toHaveURL(/#\/$/);
+    // Back to the projects list (Upcoming).
+    await page.goto('/#/projects');
+    await expect(page).toHaveURL(/#\/projects$/);
 
-    // Find the card and RSVP straight from the feed (its embedded event action).
+    // Find the card and RSVP straight from the list (its embedded event action).
     const card = page.locator('a.card', { hasText: title });
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: /^rsvp$/i }).click();
 
-    // The button must act in place: URL is STILL the feed (did not open the
+    // The button must act in place: URL is STILL the list (did not open the
     // detail), and the card's button now reads "Check in".
-    await expect(page).toHaveURL(/#\/$/);
+    await expect(page).toHaveURL(/#\/projects$/);
     await expect(card.getByRole('button', { name: /^check in$/i })).toBeVisible();
     await shot(page, testInfo, 'feed-rsvpd');
     await expectNoGenericError(page);
 
-    // Check in from the feed → "Check out", still without leaving the feed.
+    // Check in from the list → "Check out", still without leaving the list.
     await card.getByRole('button', { name: /^check in$/i }).click();
-    await expect(page).toHaveURL(/#\/$/);
+    await expect(page).toHaveURL(/#\/projects$/);
     await expect(card.getByRole('button', { name: /^check out$/i })).toBeVisible();
     await shot(page, testInfo, 'feed-checked-in');
     await expectNoGenericError(page);
@@ -190,8 +192,8 @@ test.describe('RSVP flow', () => {
       });
     }, title);
 
-    await page.goto('/#/');
-    await expect(page).toHaveURL(/#\/$/);
+    await page.goto('/#/projects');
+    await expect(page).toHaveURL(/#\/projects$/);
     // Upcoming (default) must NOT list an ended event.
     await expect(page.locator('a.card', { hasText: title })).toHaveCount(0);
     await shot(page, testInfo, 'upcoming-excludes-ended');

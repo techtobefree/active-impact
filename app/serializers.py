@@ -22,8 +22,15 @@ def user_brief(uid: int | None) -> dict | None:
 
 
 def me_shape(row: dict) -> dict:
-    """Private self view -- the ONLY shape that carries the email (and balance)."""
-    return {k: row[k] for k in ("id", "email", "display_name", "bio", "balance", "created_at")}
+    """Private self view -- the ONLY shape that carries the email (and balance).
+
+    ``is_guest`` (email IS NULL -- SERVICE_LOG.md §4) lets the UI show the "create
+    an account to save your history" nudge. A guest's email serializes as JSON
+    null; it is never emitted as the string "None".
+    """
+    shape = {k: row[k] for k in ("id", "email", "display_name", "bio", "balance", "created_at")}
+    shape["is_guest"] = row["email"] is None
+    return shape
 
 
 def user_public(row: dict) -> dict:
@@ -228,4 +235,70 @@ def item_card(row: dict) -> dict:
         "cover_image_id": cover_image_id("catalog_item", iid),
         "poster": user_brief(row["poster_id"]),
         "created_at": row["created_at"],
+    }
+
+
+# ---- service log (records) --------------------------------------------------
+
+def record_cheer_maps(record_ids: list[int], user_id: int) -> dict[int, dict]:
+    """Batch cheer_count + i_cheered for a set of record ids (no N+1, like the
+    event feed). Returns {record_id: {cheer_count, i_cheered}}."""
+    if not record_ids:
+        return {}
+    counts = {
+        r["record_id"]: r["c"]
+        for r in db.query(
+            "SELECT record_id, COUNT(*) AS c FROM cheers "
+            "WHERE record_id = ANY(%s) GROUP BY record_id",
+            (record_ids,),
+        )
+    }
+    mine = {
+        r["record_id"]
+        for r in db.query(
+            "SELECT record_id FROM cheers WHERE user_id = %s AND record_id = ANY(%s)",
+            (user_id, record_ids),
+        )
+    }
+    return {
+        rid: {"cheer_count": int(counts.get(rid, 0)), "i_cheered": rid in mine}
+        for rid in record_ids
+    }
+
+
+def record_photo_maps(record_ids: list[int]) -> dict[int, int | None]:
+    """Batch each record's photo (its cover image id) so the feed has no N+1.
+
+    A record has exactly one image; this still applies the cover rule (primary
+    else first by id) for consistency with cover_image_id.
+    """
+    if not record_ids:
+        return {}
+    rows = db.query(
+        "SELECT DISTINCT ON (entity_id) entity_id, id FROM images "
+        "WHERE entity = 'service_record' AND entity_id = ANY(%s) "
+        "ORDER BY entity_id, is_primary DESC, id ASC",
+        (record_ids,),
+    )
+    return {r["entity_id"]: r["id"] for r in rows}
+
+
+def record_card(record: dict, author: dict, cheer: dict, photo_image_id: int | None) -> dict:
+    """The feed/detail read shape for a service record.
+
+    ``author`` must carry ``email`` (to derive ``is_guest``) -- the email itself
+    is NEVER exposed. ``cheer`` is one entry from record_cheer_maps.
+    """
+    return {
+        "id": record["id"],
+        "author": {
+            "id": author["id"],
+            "display_name": author["display_name"],
+            "is_guest": author["email"] is None,
+        },
+        "caption": record["caption"],
+        "photo_image_id": photo_image_id,
+        "created_at": record["created_at"],
+        "cheer_count": int(cheer["cheer_count"]),
+        "i_cheered": bool(cheer["i_cheered"]),
     }

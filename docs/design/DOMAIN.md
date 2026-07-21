@@ -23,7 +23,10 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
         ├── token_entries              (append-only ledger: earn | tip | spend)
         ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
-        └── images                     (BYTEA, polymorphic: project | catalog_item | event)
+        ├── images                     (BYTEA, polymorphic: project | catalog_item | event | service_record)
+        └── service_records ──┬── cheers    (anonymous-first LOG: one photo + one caption; standalone)
+          (author = guest or  └── reports   (cheers: one 🙌/user/record · reports: 3 distinct → auto-hide)
+           real user)
 ```
 
 Conceptual rules:
@@ -64,6 +67,20 @@ Conceptual rules:
 - **A follow** (`follows`) is a lightweight bookmark / interest signal, one row
   per (user, project), distinct from an RSVP (attendance intent on an event). It
   carries no powers; it only drives `is_following` and `follower_count`.
+- **A guest is a `users` row with `email IS NULL` and `password_hash IS NULL`**
+  (SERVICE_LOG.md §4). `email IS NULL ⇔ guest` drives everything — it reuses
+  `sessions`, `current_user`, and `me_shape` unchanged. Both columns are NULLABLE;
+  real accounts require them at the handler level, not the column. The unique
+  `lower(email)` index is unaffected (Postgres treats NULLs as distinct, so many
+  guests coexist). `me_shape.is_guest` = `email IS NULL`.
+- **A `service_record` is a standalone social log** (SERVICE_LOG.md) — one photo
+  (reusing `images` with `entity='service_record'`) + one caption, authored by
+  whoever you currently are. It creates **no** participations, moves **no** tokens,
+  and links to **no** project/event: deliberately decoupled. **cheers** are one 🙌
+  per user per record (toggle = insert/delete on the UNIQUE(record_id,user_id));
+  **reports** auto-hide a record (`hidden=true`) once **3 distinct** reporters file
+  one. On **convert** (guest→real), a guest's records/cheers/reports re-point to the
+  target account in one tx and the guest row is retired.
 
 ## DDL house style
 
@@ -96,8 +113,8 @@ the cross-table FKs need no special handling.
 
 CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
-  email         TEXT NOT NULL,                 -- login credential; PRIVATE (never in public shapes); lowercased
-  password_hash TEXT NOT NULL,                 -- bcrypt
+  email         TEXT,                          -- login credential; PRIVATE; lowercased. NULL ⇒ GUEST (SERVICE_LOG.md §4)
+  password_hash TEXT,                          -- bcrypt. NULL ⇒ GUEST. Real accounts require both, enforced in the handler
   display_name  TEXT NOT NULL,
   bio           TEXT NOT NULL DEFAULT '',
   balance       INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),  -- cached ledger sum
@@ -285,11 +302,12 @@ CREATE INDEX IF NOT EXISTS idx_claims_item     ON catalog_claims(item_id);
 -- COVER RULE: cover_image_id = the primary image, else the first by id
 --   (ORDER BY is_primary DESC, id ASC LIMIT 1) -- so deleting the primary falls
 --   back to the first remaining image.
--- Polymorphic: an image attaches to a project, a catalog_item, OR an event. An
--- event's images are managed by the leaders of the event's project.
+-- Polymorphic: an image attaches to a project, a catalog_item, an event, OR a
+-- service_record. An event's images are managed by the leaders of the event's
+-- project; a service_record's image is managed by its author.
 CREATE TABLE IF NOT EXISTS images (
   id           BIGSERIAL PRIMARY KEY,
-  entity       TEXT NOT NULL CHECK (entity IN ('project', 'catalog_item', 'event')),
+  entity       TEXT NOT NULL CHECK (entity IN ('project', 'catalog_item', 'event', 'service_record')),
   entity_id    INTEGER NOT NULL,
   content_type TEXT NOT NULL CHECK (content_type IN ('image/jpeg', 'image/png', 'image/webp')),
   bytes        BYTEA NOT NULL,
@@ -321,6 +339,43 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_type ON audit_log(type, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_project ON audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_subject ON audit_log(subject_user_id);
+
+-- ---- service log (anonymous-first) ------------------------------------------
+-- A standalone social log (SERVICE_LOG.md): one photo + one caption, authored by
+-- whoever you currently are (guest or real). Touches no tokens/projects/ledger.
+-- The photo reuses images (entity='service_record'); cheers/reports drive light
+-- moderation. Author FKs are ON DELETE CASCADE so a retired guest's leftovers
+-- clean up; convert re-points them to the target account first (nothing is lost).
+CREATE TABLE IF NOT EXISTS service_records (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- author
+  caption     TEXT NOT NULL,                          -- 1-280 chars (validated in the handler)
+  hidden      BOOLEAN NOT NULL DEFAULT false,          -- moderation: 3 distinct reports auto-set this
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_service_records_created ON service_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_service_records_user    ON service_records(user_id);
+
+-- One 🙌 per user per record. Toggle = insert / delete; the UNIQUE also serves the
+-- feed's cheer_count + the auto-hide DISTINCT count.
+CREATE TABLE IF NOT EXISTS cheers (
+  id          BIGSERIAL PRIMARY KEY,
+  record_id   BIGINT  NOT NULL REFERENCES service_records(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (record_id, user_id)
+);
+
+-- Moderation-light: 3 distinct reporters (UNIQUE(record_id,user_id) keeps it one
+-- per user) auto-hide the record. No admin UI yet — unhide is a manual DB flag.
+CREATE TABLE IF NOT EXISTS reports (
+  id          BIGSERIAL PRIMARY KEY,
+  record_id   BIGINT  NOT NULL REFERENCES service_records(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- reporter
+  reason      TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (record_id, user_id)
+);
 
 -- ---- cross-table FKs (added late so tables exist) ---------------------------
 -- Dollar-quoted DO blocks: needed because ADD CONSTRAINT has no IF NOT EXISTS.
@@ -420,3 +475,12 @@ volunteers (flat rate is intent).
   `POST /api/projects/{id}/events`, and by the event-scoped endpoints.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
   cover_image_id, poster {id, display_name}, created_at`.
+- **record_card** (service log): `id, author {id, display_name, is_guest},
+  caption, photo_image_id` (the record's cover image, streamed via
+  `GET /api/images/{id}`)`, created_at, cheer_count, i_cheered`. The author is
+  identity-only — it **never** exposes an email. `cheer_count` + `i_cheered` are
+  **batched by record id** in the feed (no N+1), like `event_card`.
+- **me** (`GET /api/me`, the private self view): `id, email, display_name, bio,
+  balance, created_at, is_guest`. The **only** shape carrying the email (and
+  balance). `is_guest` = `email IS NULL`; a guest's `email` serializes as JSON
+  `null`, never the string `"None"`.

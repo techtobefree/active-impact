@@ -126,7 +126,7 @@ function invalidCard() {
   const c = el('<div class="card stack center"></div>');
   c.append(el("<h2>That code didn't work</h2>"));
   c.append(el('<p class="muted">This check-in code is invalid or the project has ended.</p>'));
-  c.append(el('<a class="act primary" href="#/">Back to projects</a>'));
+  c.append(el('<a class="act primary" href="#/projects">Back to projects</a>'));
   return c;
 }
 

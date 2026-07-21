@@ -30,7 +30,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB decoded (OVERVIEW.md Constants)
 # ---- request body -----------------------------------------------------------
 
 class ImageUpload(BaseModel):
-    entity: Literal["project", "catalog_item", "event"]
+    entity: Literal["project", "catalog_item", "event", "service_record"]
     entity_id: int
     content_type: str
     data_base64: str
@@ -39,8 +39,28 @@ class ImageUpload(BaseModel):
 
 # ---- helpers ----------------------------------------------------------------
 
+def decode_image_payload(content_type: str, data_base64: str) -> bytes:
+    """Validate content-type, base64-decode, and enforce the 10 MB cap.
+
+    The single source of truth for image-payload gating, shared by POST /images
+    and the one-shot service-record create (records.py) so both apply the same
+    checks. Raises api_error(422 bad_content_type / 413 image_too_large); returns
+    the decoded bytes.
+    """
+    if content_type not in ALLOWED_CONTENT_TYPES:
+        raise api_error(422, "bad_content_type")
+    try:
+        data = base64.b64decode(data_base64)
+    except (binascii.Error, ValueError):
+        raise api_error(422, "bad_content_type")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise api_error(413, "image_too_large")
+    return data
+
+
 def _may_manage(entity: str, entity_id: int, user_id: int) -> bool:
-    """True if user leads the project / posts the catalog item the image is on."""
+    """True if user leads the project / posts the catalog item / authored the
+    service record the image is on."""
     if entity == "project":
         return db.query_one(
             "SELECT 1 FROM project_leaders WHERE project_id = %s AND user_id = %s",
@@ -51,6 +71,12 @@ def _may_manage(entity: str, entity_id: int, user_id: int) -> bool:
         return db.query_one(
             "SELECT 1 FROM project_leaders pl JOIN events e "
             "ON e.project_id = pl.project_id WHERE e.id = %s AND pl.user_id = %s",
+            (entity_id, user_id),
+        ) is not None
+    if entity == "service_record":
+        # A record's images belong to its author (SERVICE_LOG.md §8).
+        return db.query_one(
+            "SELECT 1 FROM service_records WHERE id = %s AND user_id = %s",
             (entity_id, user_id),
         ) is not None
     # catalog_item
@@ -74,16 +100,7 @@ def upload_image(body: ImageUpload, user: dict = Depends(current_user)):
         code = "not_a_leader" if body.entity in ("project", "event") else "not_yours"
         raise api_error(403, code)
 
-    if body.content_type not in ALLOWED_CONTENT_TYPES:
-        raise api_error(422, "bad_content_type")
-
-    try:
-        data = base64.b64decode(body.data_base64)
-    except (binascii.Error, ValueError):
-        raise api_error(422, "bad_content_type")
-
-    if len(data) > MAX_IMAGE_BYTES:
-        raise api_error(413, "image_too_large")
+    data = decode_image_payload(body.content_type, body.data_base64)
 
     with db.tx() as c:
         has_primary = c.execute(

@@ -35,49 +35,59 @@ test.describe('Auth (email + password)', () => {
     await page.locator('input[name=display_name]').fill('Case Tester');
     await page.locator('input[name=password]').fill('admin1234');
     await page.getByRole('button', { name: /create account/i }).click();
-    await expect(page.locator('#nav')).toBeVisible();
+    await expect(page).toHaveURL(/#\/$/); // convert landed home = it actually completed
     await shot(page, testInfo, 'registered');
     await expectNoGenericError(page);
   });
 
-  test('duplicate email is flagged under the email field', async ({ page }, testInfo) => {
+  // Convert semantics (SERVICE_LOG.md §4/D7): the guest-first screen no longer
+  // "rejects a duplicate email" — an existing email + the RIGHT password signs you
+  // into that account and merges the throwaway guest's logs into it.
+  test('an existing email + right password signs into that account (merge)', async ({ page }, testInfo) => {
     const em = uemail('dup');
     await page.goto('/#/register');
     await page.locator('input[name=email]').fill(em);
     await page.locator('input[name=display_name]').fill('First Person');
     await page.locator('input[name=password]').fill('password123');
     await page.getByRole('button', { name: /create account/i }).click();
-    await expect(page.locator('#nav')).toBeVisible();
+    await expect(page).toHaveURL(/#\/$/); // convert landed home = it actually completed
 
+    // Sign out (drops to a fresh guest) → convert to the SAME email with the right
+    // password → merged back into the original account.
     await logoutUI(page);
     await page.goto('/#/register');
     await page.locator('input[name=email]').fill(em);
-    await page.locator('input[name=display_name]').fill('Second Person');
     await page.locator('input[name=password]').fill('password123');
     await page.getByRole('button', { name: /create account/i }).click();
-    await expect(fieldError(page, 'email')).toContainText(/already exists|sign in/i);
-    await shot(page, testInfo, 'duplicate-under-field');
+    await expect(page).toHaveURL(/#\/$/); // convert landed home = it actually completed
+
+    // It is the ORIGINAL account (First Person), not a freshly created one.
+    await page.goto('/#/me');
+    await expect(page.getByRole('heading', { name: /First Person/i })).toBeVisible();
+    await shot(page, testInfo, 'merged-into-original');
+    await expectNoGenericError(page);
   });
 
-  test('wrong-password login says so; correct password signs in', async ({ page }, testInfo) => {
+  test('an existing email + wrong password is rejected; the right one then signs in', async ({ page }, testInfo) => {
     const em = uemail('login');
     await page.goto('/#/register');
     await page.locator('input[name=email]').fill(em);
     await page.locator('input[name=display_name]').fill('Login Tester');
     await page.locator('input[name=password]').fill('password123');
     await page.getByRole('button', { name: /create account/i }).click();
-    await expect(page.locator('#nav')).toBeVisible();
+    await expect(page).toHaveURL(/#\/$/); // convert landed home = it actually completed
 
     await logoutUI(page);
     await page.locator('input[name=email]').fill(em);
     await page.locator('input[name=password]').fill('nope-wrong-pw');
-    await page.getByRole('button', { name: /^sign in$/i }).click();
+    await page.getByRole('button', { name: /create account/i }).click();
     await expect(formError(page)).toContainText(/wrong email or password/i);
     await shot(page, testInfo, 'wrong-password');
 
+    // The guest session survives the wrong password, so the right one just works.
     await page.locator('input[name=password]').fill('password123');
-    await page.getByRole('button', { name: /^sign in$/i }).click();
-    await expect(page.locator('#nav')).toBeVisible();
+    await page.getByRole('button', { name: /create account/i }).click();
+    await expect(page).toHaveURL(/#\/$/); // convert landed home = it actually completed
     await shot(page, testInfo, 'signed-in');
     await expectNoGenericError(page);
   });

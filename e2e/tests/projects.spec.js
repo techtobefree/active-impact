@@ -6,6 +6,9 @@ test.describe('Projects', () => {
     await registerUI(page, uemail('proj'), 'password123', 'Project Host');
     await shot(page, testInfo, 'home');
 
+    // The projects list is no longer the home feed — it lives at #/projects.
+    await page.goto('/#/projects');
+
     // Create a service project (POST /projects seeds its first event; expected_minutes defaults to 120).
     const title = 'E2E Beach Cleanup ' + uname();
     await page.getByRole('link', { name: /new service project/i }).click();
@@ -45,6 +48,7 @@ test.describe('Projects', () => {
 
   test('a newly created project appears under "Mine"', async ({ page }, testInfo) => {
     await registerUI(page, uemail('mine'), 'password123', 'Mine Tester');
+    await page.goto('/#/projects');
     const title = 'My Mine Project ' + uname();
     await page.getByRole('link', { name: /new service project/i }).click();
     await page.locator('input[name=title]').fill(title);
@@ -53,7 +57,7 @@ test.describe('Projects', () => {
     await page.getByRole('button', { name: /create project/i }).click();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
 
-    await page.goto('/#/');
+    await page.goto('/#/projects');
     await page.getByRole('button', { name: /^mine$/i }).click();
     await expect(page.getByRole('link', { name: title })).toBeVisible();
     await shot(page, testInfo, 'mine-tab');

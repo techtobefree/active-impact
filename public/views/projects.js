@@ -19,7 +19,7 @@ function errNode(e) {
 function errScreen(e) {
   const card = el('<div class="card stack center"></div>');
   card.append(el(`<p>${esc(errMessage(e))}</p>`));
-  card.append(el('<a class="act" href="#/">Back to projects</a>'));
+  card.append(el('<a class="act" href="#/projects">Back to projects</a>'));
   mount(card);
 }
 

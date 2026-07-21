@@ -166,7 +166,8 @@ input.invalid, textarea.invalid { border-color: var(--red); outline-color: color
 }
 #nav a {
   flex: 1; text-align: center; padding: .5rem 0; color: var(--muted);
-  font-size: .7rem; display: flex; flex-direction: column; align-items: center; gap: .1rem;
+  font-size: .66rem; display: flex; flex-direction: column; align-items: center; gap: .1rem;
+  white-space: nowrap; min-width: 0;
 }
 #nav a .ico { font-size: 1.3rem; }
 #nav a.active { color: var(--green); }
@@ -179,6 +180,54 @@ input.invalid, textarea.invalid { border-color: var(--red); outline-color: color
 .empty { text-align: center; color: var(--muted); padding: 2rem 1rem; }
 .spinner { text-align: center; color: var(--muted); padding: 2rem; }
 .strip { display: flex; gap: .5rem; overflow-x: auto; padding-bottom: .3rem; }
+
+/* ---- service log (records) ---- */
+/* Photo-forward card: the image is the star. Bounded so a portrait shot can't
+   dominate the viewport; the feed and the log preview share this class. */
+.record-photo {
+  display: block; width: 100%; max-height: 70vh; object-fit: cover;
+  border-radius: 8px; background: var(--bg);
+}
+.card.record .record-photo { margin-bottom: .6rem; }
+.record-photo-link { display: block; }
+.record-author { color: var(--ink); font-weight: 700; }
+.record-caption { white-space: pre-wrap; margin: .1rem 0 .2rem; }
+.cheer.primary { background: var(--green); color: var(--green-ink); border-color: var(--green); }
+.cheer .cheer-count { font-weight: 700; }
+
+/* Overflow "⋯" menu (report / delete-if-mine). */
+.menu-wrap { position: relative; flex: none; }
+.menu-btn { padding: .3rem .55rem; }
+.menu {
+  position: absolute; right: 0; top: 100%; z-index: 20; min-width: 168px;
+  margin-top: .25rem; background: var(--card); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: 0 6px 18px rgba(0, 0, 0, .18); overflow: hidden;
+}
+.menu-item {
+  display: block; width: 100%; text-align: left; border: none; border-radius: 0;
+  background: var(--card); padding: .6rem .85rem; font-weight: 600;
+}
+.menu-item + .menu-item { border-top: 1px solid var(--line); }
+.menu-item.del { color: var(--red); }
+
+/* The log-screen photo picker (bigger sibling of .thumb-add). */
+.photo-pick {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .25rem; padding: 1.6rem 1rem; border: 1px dashed var(--line);
+  border-radius: 10px; color: var(--muted); font-weight: 600; cursor: pointer;
+  background: var(--card);
+}
+.photo-pick .big { font-size: 2rem; line-height: 1; }
+
+/* ＋ Log floating action button (over the feed / a record). */
+.fab {
+  position: fixed; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 30; width: 56px; height: 56px; border-radius: 50%;
+  background: var(--green); color: var(--green-ink); border: none;
+  display: grid; place-items: center; font-size: 1.9rem; line-height: 1;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .28);
+}
+.fab:active { transform: translateY(1px); }
 
 /* ---- toast ---- */
 #toast {

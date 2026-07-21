@@ -10,6 +10,28 @@
 > Read alongside DOMAIN.md, API.md, FRONTEND.md, and `app/auth.py` / `app/images.py`
 > (the integration points). Follow docs/framework/MIN.md: docs → TDD → verify → lean.
 
+> **STATUS — the BACKEND is IMPLEMENTED (2026-07).** §4 identity, §5 domain model,
+> §6 API, §8 photos, and §9 moderation are shipped and green:
+> - migration **0008** (`alembic/versions/0008_service_log.py`) — nullable
+>   `users.email`/`password_hash`, the `service_records` / `cheers` / `reports`
+>   tables, and the widened `ck_images_entity_valid` (guarded + reversible, like
+>   0002–0007);
+> - `app/auth.py` — `POST /auth/guest`, `POST /auth/convert` (attach/merge),
+>   `me_shape.is_guest`; `app/records.py` — the `/service_records…` endpoints;
+>   `app/images.py` — `entity='service_record'`;
+> - covered by `tests/test_service_log.py` (guest bootstrap, convert attach/merge,
+>   records + validation + rate-limit, feed scope/hidden, cheer toggle, report
+>   auto-hide, author-only delete).
+>
+> **UPDATE — the FRONTEND (§7) is now IMPLEMENTED (2026-07).** The guest-first boot
+> (`app.js` mints a guest before first render; a first run lands on `#/log`), the
+> feed-home + log + record-detail views (`public/views/records.js`), the 🙌 cheer
+> toggle, the reframed single **convert** screen (`public/views/auth.js`, reused by
+> the guest Me "create account" card in `public/views/profile.js`), and the 5-item
+> nav + **＋ Log** FAB are all shipped (SW bumped v18 → v19). Covered by
+> `e2e/tests/service_log.spec.js` (first-run → post → feed → cheer → second-guest
+> cheer → convert-keeps-mine → delete). See FRONTEND.md for the router/screens.
+
 ---
 
 ## 1. The loop
@@ -185,7 +207,7 @@ Feed enrichment (cheer_count / i_cheered) must be **batched by record id** (no N
 
 ---
 
-## 7. Frontend (no-build PWA — see FRONTEND.md)
+## 7. Frontend (no-build PWA — see FRONTEND.md) — ✅ IMPLEMENTED (2026-07)
 
 ### Routing / boot
 - **Boot change (`app.js`):** if no `ai_token`, call `POST /auth/guest`, store the returned

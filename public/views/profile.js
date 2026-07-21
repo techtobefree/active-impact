@@ -5,6 +5,7 @@ import {
   fmtDate, emptyState, errMessage, isStandalone, doInstall,
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
+import { convertForm } from './auth.js';
 
 // ---- public profile: #/u/:id ----
 export async function userView(id) {
@@ -70,13 +71,84 @@ function tipSection(user) {
   return wrap;
 }
 
-// ---- my profile + edit: #/me ----
+// ---- my profile: #/me ----
 export async function meView() {
   let me = currentUser();
   if (!me) { mount(spinner()); me = await refreshMe(); }
   if (!me) { mount(emptyState('Please sign in.')); return; }
+  return me.is_guest ? guestMe(me) : realMe(me);
+}
 
-  // Summary
+// Shared appearance + install controls (both guest and real profiles).
+function appearanceCard() {
+  const actions = el('<div class="card stack"></div>');
+  if (!isStandalone()) {
+    const install = el('<button class="act block">📲 Install app</button>');
+    install.onclick = () => doInstall();
+    actions.append(install);
+  }
+  // Light/white is the default; dark is an opt-in toggle.
+  const themeRow = el('<div class="row"><span class="grow">Dark mode</span></div>');
+  const themeSwitch = el('<label class="switch" title="Toggle dark mode"></label>');
+  const themeCb = el('<input type="checkbox">');
+  themeCb.checked = localStorage.getItem('ai_theme') === 'dark';
+  themeSwitch.append(themeCb, el('<span class="slider"></span>'));
+  themeCb.onchange = () => {
+    if (themeCb.checked) { localStorage.setItem('ai_theme', 'dark'); document.documentElement.dataset.theme = 'dark'; }
+    else { localStorage.setItem('ai_theme', 'light'); delete document.documentElement.dataset.theme; }
+  };
+  themeRow.append(themeSwitch);
+  actions.append(themeRow);
+  return actions;
+}
+
+// GUEST: the auto handle (renameable) + a prominent "save your service" convert
+// card. No sign-out (a guest signing out would just mint another guest).
+function guestMe(me) {
+  const summary = el('<div class="card stack"></div>');
+  const head = el('<div class="row"></div>');
+  head.append(avatarEl(me, true));
+  head.append(el(
+    `<div class="grow"><h1 style="margin:0">${esc(me.display_name)}</h1>` +
+    '<p class="muted" style="margin:.2rem 0 0">You’re browsing as a guest</p></div>',
+  ));
+  summary.append(head);
+  summary.append(el('<a class="act ghost block" href="#/u/' + esc(me.id) + '">View public profile</a>'));
+
+  // Rename the auto handle (PATCH /me) — guests and real users alike may rename.
+  summary.append(addForm({
+    fields: [{
+      name: 'display_name', label: 'Your name', value: me.display_name || '',
+      validate: (v) => {
+        const c = [...v.trim()].length;
+        if (c < 1) return 'Name is required.';
+        if (c > 60) return 'At most 60 characters.';
+        return null;
+      },
+    }],
+    submit: 'Rename',
+    onSubmit: async (body) => {
+      const updated = await api('/me', { method: 'PATCH', body });
+      setSession(getToken(), updated);
+      toast('Name updated');
+      await refreshMe();
+      refresh();
+    },
+  }));
+
+  // The convert card — the heart of the guest Me screen.
+  const save = el('<div class="card stack"></div>');
+  save.append(el('<h2 style="margin:0">Create an account to save your service</h2>'));
+  save.append(el('<p class="muted" style="margin:0">Your logs, cheers and handle come with you. Already have an account? We’ll sign you in and bring them along.</p>'));
+  save.append(convertForm({ onSuccess: () => { toast('Account saved 🎉'); refresh(); } }));
+
+  const root = el('<div class="stack"></div>');
+  root.append(summary, save, appearanceCard());
+  mount(root);
+}
+
+// REAL account: today's profile + edit + sign out (unchanged behaviour).
+function realMe(me) {
   const summary = el('<div class="card stack"></div>');
   const head = el('<div class="row"></div>');
   head.append(avatarEl(me, true));
@@ -90,7 +162,6 @@ export async function meView() {
   ));
   summary.append(el(`<a class="act ghost block" href="#/u/${esc(me.id)}">View public profile</a>`));
 
-  // Edit form
   const editCard = el('<div class="card"></div>');
   editCard.append(addForm({
     title: 'Edit profile',
@@ -108,31 +179,16 @@ export async function meView() {
     },
   }));
 
-  // Actions: install + sign out
-  const actions = el('<div class="card stack"></div>');
-  if (!isStandalone()) {
-    const install = el('<button class="act block">📲 Install app</button>');
-    install.onclick = () => doInstall();
-    actions.append(install);
-  }
-  // Appearance: light/white is the default; dark is an opt-in toggle.
-  const themeRow = el('<div class="row"><span class="grow">Dark mode</span></div>');
-  const themeSwitch = el('<label class="switch" title="Toggle dark mode"></label>');
-  const themeCb = el('<input type="checkbox">');
-  themeCb.checked = localStorage.getItem('ai_theme') === 'dark';
-  themeSwitch.append(themeCb, el('<span class="slider"></span>'));
-  themeCb.onchange = () => {
-    if (themeCb.checked) { localStorage.setItem('ai_theme', 'dark'); document.documentElement.dataset.theme = 'dark'; }
-    else { localStorage.setItem('ai_theme', 'light'); delete document.documentElement.dataset.theme; }
-  };
-  themeRow.append(themeSwitch);
-  actions.append(themeRow);
-
+  const actions = appearanceCard();
   const out = el('<button class="act del block">Sign out</button>');
   out.onclick = async () => {
     out.disabled = true;
     try { await api('/auth/logout', { method: 'POST' }); } catch { /* sign out locally regardless */ }
     clearSession();
+    // Stay "always signed in": drop back to a fresh guest, then to the convert
+    // screen so the just-signed-out user can sign back in (SERVICE_LOG.md §4/C5).
+    try { const d = await api('/auth/guest', { method: 'POST' }); setSession(d.token, d.user); } catch { /* offline */ }
+    await refreshMe();
     location.hash = '#/login';
   };
   actions.append(out);
