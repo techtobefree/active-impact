@@ -26,9 +26,10 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── token_entries              (append-only ledger: earn | tip | spend)
         ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
         ├── images                     (BYTEA, polymorphic: project | catalog_item | event | service_record)
-        └── service_records ──┬── cheers    (anonymous-first LOG: one photo + one caption; standalone)
+        └── service_records ──┬── cheers    (anonymous-first LOG: one photo + one caption)
           (author = guest or  └── reports   (cheers: one 🙌/user/record · reports: 3 distinct → auto-hide)
-           real user)
+           real user)            └─ event_id → events  (FEED.md: which event it was logged AT;
+                                                        NULL when nothing matched)
 ```
 
 Conceptual rules:
@@ -75,10 +76,13 @@ Conceptual rules:
   real accounts require them at the handler level, not the column. The unique
   `lower(email)` index is unaffected (Postgres treats NULLs as distinct, so many
   guests coexist). `me_shape.is_guest` = `email IS NULL`.
-- **A `service_record` is a standalone social log** (SERVICE_LOG.md) — one photo
+- **A `service_record` is one logged act of service** (SERVICE_LOG.md) — one photo
   (reusing `images` with `entity='service_record'`) + one caption, authored by
-  whoever you currently are. It creates **no** participations, moves **no** tokens,
-  and links to **no** project/event: deliberately decoupled. **cheers** are one 🙌
+  whoever you currently are. It creates **no** participations and moves **no**
+  tokens, but it **does belong to an event** (`event_id`, nullable — FEED.md): the
+  server resolves which one from the author's check-in / RSVP / GPS + time at log
+  time. `event_id IS NULL` means nothing matched — the record is the author's own
+  log entry until they attach it. **cheers** are one 🙌
   per user per record (toggle = insert/delete on the UNIQUE(record_id,user_id));
   **reports** auto-hide a record (`hidden=true`) once **3 distinct** reporters file
   one. On **convert** (guest→real), a guest's records/cheers/reports re-point to the
@@ -160,6 +164,9 @@ CREATE TABLE IF NOT EXISTS events (
   starts_at        TIMESTAMPTZ NOT NULL,
   expected_minutes INTEGER NOT NULL CHECK (expected_minutes > 0),
   location_text    TEXT NOT NULL,              -- free text; maps/geocoding deferred
+  lat              DOUBLE PRECISION,           -- where it actually is (FEED.md F5): set by a
+  lon              DOUBLE PRECISION,           -- leader, or bootstrapped from the first matched
+                                               -- record's GPS. NULL = unknown (no geo matching)
   status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
   checkin_code     TEXT NOT NULL UNIQUE,       -- secrets.token_urlsafe(6); regenerable
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -370,14 +377,23 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_subject ON audit_log(subject_user_id);
 -- moderation. Author FKs are ON DELETE CASCADE so a retired guest's leftovers
 -- clean up; convert re-points them to the target account first (nothing is lost).
 CREATE TABLE IF NOT EXISTS service_records (
-  id          BIGSERIAL PRIMARY KEY,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- author
-  caption     TEXT NOT NULL,                          -- 1-280 chars (validated in the handler)
-  hidden      BOOLEAN NOT NULL DEFAULT false,          -- moderation: 3 distinct reports auto-set this
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- author
+  caption      TEXT NOT NULL,                         -- 1-280 chars (validated in the handler)
+  hidden       BOOLEAN NOT NULL DEFAULT false,        -- moderation: 3 distinct reports auto-set this
+  -- Which event this was logged AT (FEED.md F1). SET NULL, never CASCADE: deleting
+  -- an event must not delete the photos people took there.
+  event_id     BIGINT REFERENCES events(id) ON DELETE SET NULL,
+  -- The author's position at log time — a MATCHING INPUT ONLY, never served in any
+  -- read shape (FEED.md F6). A caption is public; coordinates are not.
+  lat          DOUBLE PRECISION,
+  lon          DOUBLE PRECISION,
+  match_reason TEXT,                                  -- explicit|checked_in|participated|rsvp|nearby|NULL
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_service_records_created ON service_records(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_service_records_user    ON service_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_service_records_event   ON service_records(event_id, created_at DESC);
 
 -- One 🙌 per user per record. Toggle = insert / delete; the UNIQUE also serves the
 -- feed's cheer_count + the auto-hide DISTINCT count.
@@ -478,6 +494,7 @@ volunteers (flat rate is intent).
 | I13 | An `attestations` row always names two **different** users (CHECK) and is unique per (event, scanner, subject) — a repeat scan is a no-op, never an error |
 | I14 | A scan never creates a participation for the **subject**; the scanner's participation always carries a `waiver_id` from the event's project (I6 holds for every row, however created) |
 | I15 | `participations.attested` is true ⟺ an attestation for that (event, user) existed at or before the participation was written — set at insert, and flipped by a later scan only on a participation that is still open |
+| F-I1…F-I9 | The one-feed invariants — event matching, the ≤2 records per card, and "coordinates are never served". Stated and tested in [FEED.md § 9](./FEED.md#9-invariants-the-test-suite-asserts-these) |
 
 ## Standard read shapes (used by API.md)
 
@@ -486,26 +503,37 @@ volunteers (flat rate is intent).
   Σ `earn` entries, `projects_joined` = count distinct **projects** across the
   events of my closed participations). Balance is **private** (only in `/api/me`).
 - **project_card**: `id, title, cover_image_id` (primary image, else first by id,
-  or null)`, follower_count, event` — where `event` is ONE embedded **event_card**
-  (the soonest not-over event for `upcoming`, the most-recent for `past`) or
-  `null` (a project with no relevant event).
+  or null)`, follower_count, event, records` — where `event` is ONE embedded
+  **event_card** (the soonest not-over event for `upcoming`, the most-recent for
+  `past`) or `null` (a project with no relevant event), and `records` is the
+  **≤2 most recent non-hidden record_cards of that event**, newest-first (FEED.md
+  F3; `[]` when there are none, batched by event id — no N+1).
 - **event_card**: `id, starts_at, location_text, expected_minutes, status,
   is_over` (per-event), `cover_image_id` (the event's own cover — primary image
-  else first by id, or null), `checked_in_count` + per-requesting-user state
-  `my_rsvp {is_leader}|null`, `my_open_participation {id, checked_in_at}|null`,
-  `my_hours_here` (batched by event id — no N+1).
+  else first by id, or null), `checked_in_count`, `record_count` (non-hidden) +
+  per-requesting-user state `my_rsvp {is_leader}|null`,
+  `my_open_participation {id, checked_in_at}|null`, `my_hours_here` (batched by
+  event id — no N+1).
 - **event_detail**: event_card + `image_ids[]` (the event's images, entity
-  `'event'`, ordered by id) + `checkin_code` (present **only** when the requester
-  leads the event's project). Events may carry their own images (entity `'event'`);
-  the event's project leaders manage them. Used inside project detail, returned by
-  `POST /api/projects/{id}/events`, and by the event-scoped endpoints.
+  `'event'`, ordered by id) + `lat`/`lon` (nullable — the ONLY shape serving
+  coordinates, so a leader can see and correct them) + `checkin_code` (present
+  **only** when the requester leads the event's project). Events may carry their
+  own images (entity `'event'`); the event's project leaders manage them. Used
+  inside project detail, returned by `POST /api/projects/{id}/events`, and by the
+  event-scoped endpoints.
+- **event_candidate** (FEED.md §4, the "which event am I at?" picker):
+  `event_id, project_id, project_title, starts_at, location_text,
+  distance_km|null, reason`.
 - **item_card**: `id, kind, title, price_tokens, quantity, status,
   cover_image_id, poster {id, display_name}, created_at`.
 - **record_card** (service log): `id, author {id, display_name, is_guest},
   caption, photo_image_id` (the record's cover image, streamed via
-  `GET /api/images/{id}`)`, created_at, cheer_count, i_cheered`. The author is
-  identity-only — it **never** exposes an email. `cheer_count` + `i_cheered` are
-  **batched by record id** in the feed (no N+1), like `event_card`.
+  `GET /api/images/{id}`)`, created_at, cheer_count, i_cheered, event` — where
+  `event` is `{id, project_id, project_title, starts_at}` or `null` (unattached).
+  The author is identity-only — it **never** exposes an email; the record's
+  `lat`/`lon`/`match_reason` are **never** exposed at all (FEED.md F6).
+  `cheer_count` + `i_cheered` are **batched by record id** in the feed (no N+1),
+  like `event_card`.
 - **me** (`GET /api/me`, the private self view): `id, email, display_name, bio,
   balance, created_at, is_guest`. The **only** shape carrying the email (and
   balance). `is_guest` = `email IS NULL`; a guest's `email` serializes as JSON

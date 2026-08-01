@@ -23,6 +23,14 @@
 >   records + validation + rate-limit, feed scope/hidden, cheer toggle, report
 >   auto-hide, author-only delete).
 >
+> ⚠ **SUPERSEDED IN PART (2026-08) — see [FEED.md](./FEED.md).** The founder
+> reversed §3's first non-goal: a service record now **belongs to an event**
+> (`service_records.event_id`, auto-matched by check-in / RSVP / GPS+time), the
+> standalone record feed is **gone** as a screen, and home is the projects feed
+> with each event's latest photos on the project card. Everything else in this
+> doc — guest identity (§4), the record/cheer/report model (§5), the API basics
+> (§6), photos (§8), and moderation (§9) — is unchanged and still current.
+>
 > **UPDATE — the FRONTEND (§7) is now IMPLEMENTED (2026-07).** The guest-first boot
 > (`app.js` mints a guest before first render; a first run lands on `#/log`), the
 > feed-home + log + record-detail views (`public/views/records.js`), the 🙌 cheer

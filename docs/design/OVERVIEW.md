@@ -14,7 +14,10 @@
 > Feature designs layered on top of the above:
 > [SERVICE_LOG.md](./SERVICE_LOG.md) — the anonymous-first log-and-share layer ·
 > [CHECKIN_PROOF.md](./CHECKIN_PROOF.md) — asserted vs **attested** presence
-> (the personal QR, peer check-in, and what it does and does not prove)
+> (the personal QR, peer check-in, and what it does and does not prove) ·
+> [FEED.md](./FEED.md) — **one feed**: a logged service belongs to an **event**,
+> and the home screen is the projects feed carrying each event's latest photos
+> (supersedes SERVICE_LOG.md §3's "never link a record to an event")
 >
 > Known gaps live in [`../issues/`](../issues/).
 >

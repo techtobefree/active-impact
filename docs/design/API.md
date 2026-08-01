@@ -57,11 +57,11 @@ Project endpoints are project-scoped; per-occurrence actions are event-scoped.
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/projects` 📄 | `?scope=upcoming` (default: projects with **≥1 not-over event**; card embeds the **soonest** not-over event; ordered by that event ASC) · `past` (projects with **no** not-over event; card embeds the **most-recent** event, or `null`; ordered by that event DESC) · `mine` (**leaderships ∪ rsvp/participation on any event**; DESC). `&q=` ILIKE on project title/description or any event's location. Returns **project_card[]** (`id, title, cover_image_id, follower_count, event`), the embedded **event_card** carrying the event's own `cover_image_id` + per-requesting-user state (`is_over, checked_in_count, my_rsvp, my_open_participation, my_hours_here`) batched by event id — no N+1 | — |
-| `POST /api/projects` | `{title, description?, waiver_text?, location_text, starts_at, expected_minutes}` → **201** project detail. In one tx: insert project, owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` — placeholder marked *not legal advice*), and the **first event** (fresh `checkin_code`, status `open`) | 422 |
+| `GET /api/projects` 📄 | **This is the app's feed** (FEED.md F2). `?scope=upcoming` (default: projects with **≥1 not-over event**; card embeds the **soonest** not-over event; ordered by that event ASC) · `past` (projects with **no** not-over event; card embeds the **most-recent** event, or `null`; ordered by that event DESC) · `mine` (**leaderships ∪ rsvp/participation on any event**; DESC). `&q=` ILIKE on project title/description or any event's location. Returns **project_card[]** (`id, title, cover_image_id, follower_count, event, records`), the embedded **event_card** carrying the event's own `cover_image_id`, `record_count` + per-requesting-user state (`is_over, checked_in_count, my_rsvp, my_open_participation, my_hours_here`), and `records` the **≤2 newest non-hidden record_cards of that event** — all batched by event id, no N+1 | — |
+| `POST /api/projects` | `{title, description?, waiver_text?, location_text, starts_at, expected_minutes, lat?, lon?}` → **201** project detail. In one tx: insert project, owner into `project_leaders`, waiver v1 (`waiver_text` or `DEFAULT_WAIVER` — placeholder marked *not legal advice*), and the **first event** (fresh `checkin_code`, status `open`, optional coordinates) | 422 |
 | `GET /api/projects/{id}` | Detail: `id, title, description, owner {id,display_name}, leaders[] {id,display_name}, image_ids[], cover_image_id, primary_image_id` (cover: primary else first by id, or null)`, waiver {id,version,text}` (current)`, am_leader, is_following, follower_count, events[]` — each an **event_detail** (`id, starts_at, location_text, expected_minutes, status, is_over, cover_image_id, image_ids[], checked_in_count, my_rsvp, my_open_participation, my_hours_here` + `checkin_code` **only when `am_leader`**), ordered not-over ASC then over DESC | 404 |
 | `PATCH /api/projects/{id}` | Leader only. `{title?, description?, waiver_text?}` — a **changed** `waiver_text` INSERTs waiver v(n+1) (I5). Event fields are edited per event, not here | 403 `not_a_leader` |
-| `POST /api/projects/{id}/events` | Leader. `{location_text, starts_at, expected_minutes}` → **201** **event_detail** for the new occurrence (fresh `checkin_code`, status `open`) | 403 `not_a_leader`; 404; 422 |
+| `POST /api/projects/{id}/events` | Leader. `{location_text, starts_at, expected_minutes, lat?, lon?}` → **201** **event_detail** for the new occurrence (fresh `checkin_code`, status `open`) | 403 `not_a_leader`; 404; 422 |
 | `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (display names only, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
 | `DELETE /api/projects/{id}/leaders/{user_id}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
 | `POST /api/projects/{id}/follow` | Follow the project. Idempotent (`ON CONFLICT (user_id,project_id) DO NOTHING`). → `{is_following: true, follower_count}` | 404 |
@@ -74,7 +74,9 @@ event's project (resolved event → project_id).
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/events/{id}` | **event_detail** + `project {id, title, cover_image_id}` summary + `waiver {id,version,text}` (the project's current) + `am_leader` | 404 |
+| `GET /api/events/candidates` | **Which event am I at?** (FEED.md §4). `?lat=&lon=` (both optional) → `{match: event_candidate\|null, candidates: event_candidate[]}` — `match` is what a record posted *right now* would attach to; `candidates` is every event in its live window ranked the same way (in-progress first, then closest start; geo candidates carry `distance_km`). Powers the log screen's "Posting to…" line and its picker | — |
+| `GET /api/events/{id}` | **event_detail** (incl. `lat`/`lon`) + `project {id, title, cover_image_id}` summary + `waiver {id,version,text}` (the project's current) + `am_leader` | 404 |
+| `PATCH /api/events/{id}` | Leader. `{starts_at?, location_text?, expected_minutes?, lat?, lon?}` → event detail. The only way to correct an occurrence's time/place, and how a leader pins its coordinates for geo matching (`lat`/`lon` must be sent together; both `null` clears them) | 403 `not_a_leader`; 404; 422 |
 | `POST /api/events/{id}/rsvp` | RSVP any time the event is **not over**. Idempotent (`ON CONFLICT (event_id,user_id) DO NOTHING`). → event detail | 404; 409 `event_over` |
 | `POST /api/events/{id}/checkin` | **Self-service, ASSERTED check-in** (no QR, no waiver screen) — "I say I was here", `attested = false` unless a sighting already exists (CHECKIN_PROOF.md §5.4). Ensures an RSVP row, then inserts a participation pinned to the event's project's **current** waiver (I6). Re-check-in after checkout is fine while not over. → event detail | 404; 409 `event_over`; 409 `already_checked_in` |
 | `GET /api/events/{id}/rsvps` | Leader only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, is_attested` (a sighting exists for them at this event)`, created_at}]` | 403 `not_a_leader`; 404 |
@@ -149,18 +151,21 @@ charity session can instead be posted as a *project* to earn via check-in.
 
 ## Service records — `app/records.py`
 
-The anonymous-first social log (SERVICE_LOG.md): one record = one photo + one
-caption, authored by whoever you currently are (guest or real). Standalone — it
-creates no participations, moves no tokens, and links to no project/event. All
-endpoints require a token (a guest's counts). Returns **record_card**
-(`id, author {id, display_name, is_guest}, caption, photo_image_id, created_at,
-cheer_count, i_cheered`) — the author **never** exposes an email.
+One record = one photo + one caption, authored by whoever you currently are (guest
+or real — SERVICE_LOG.md §4). It creates no participations and moves no tokens,
+but it **belongs to an event** (FEED.md): the server resolves which one from the
+author's check-in / RSVP / GPS + time, and the event's project card carries its
+latest two. All endpoints require a token (a guest's counts). Returns
+**record_card** (`id, author {id, display_name, is_guest}, caption,
+photo_image_id, created_at, cheer_count, i_cheered, event`) — the author **never**
+exposes an email, and the record's `lat`/`lon`/`match_reason` are never served.
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `POST /api/service_records` | `{caption, content_type, data_base64}` → **201** record_card. One tx: insert the record, then its photo (`entity='service_record'`, `is_primary`). Caption 1–280 (stripped); photo reuses the 10 MB / content-type gate. Rate-limited to ≤ 20 records / author / hour | 422 `bad_content_type`; 413 `image_too_large`; 429 `rate_limited` |
-| `GET /api/service_records` 📄 | `?scope=all` (default, global feed) `\|mine` (the caller's own). Newest-first, **excludes `hidden`**. `cheer_count` + `i_cheered` batched by record id (no N+1) | — |
+| `POST /api/service_records` | `{caption, content_type, data_base64, event_id?, lat?, lon?}` → **201** record_card. One tx: resolve the event (FEED.md §4 — `explicit` > `checked_in` > `participated` > `rsvp` > `nearby` > none), insert the record with `event_id`/`match_reason`, then its photo (`entity='service_record'`, `is_primary`), then bootstrap the event's coordinates if it had none. Caption 1–280 (stripped); photo reuses the 10 MB / content-type gate. Rate-limited to ≤ 20 records / author / hour | 404 `event_not_found` (explicit id); 422 `bad_content_type`; 413 `image_too_large`; 429 `rate_limited` |
+| `GET /api/service_records` 📄 | `?scope=all` (default — every **event-attached** record; the global stream of unattached logs is gone with the standalone feed, FEED.md F7) `\|mine` (the caller's own, attached or not) `\|unattached` (mine, `event_id IS NULL`). `&event_id=` filters to **one event's feed** (any scope). Newest-first, **excludes `hidden`**. `cheer_count` + `i_cheered` batched by record id (no N+1) | — |
 | `GET /api/service_records/{id}` | → record_card (share target / detail) | 404 `not_found` (absent **or** hidden) |
+| `PATCH /api/service_records/{id}` | **Author only.** `{event_id}` — attach, re-attach, or (with `null`) detach; `match_reason` becomes `explicit`. The remedy when the auto-match guessed wrong or found nothing → record_card | 403 `not_yours`; 404 `not_found`, `event_not_found` |
 | `DELETE /api/service_records/{id}` | **Author only** → **204**. Cascades cheers/reports (FK); the polymorphic image is removed in the same tx | 403 `not_yours`; 404 |
 | `POST /api/service_records/{id}/cheer` | Add my 🙌. Idempotent (`ON CONFLICT DO NOTHING`) → `{cheered: true, cheer_count}` | 404 |
 | `DELETE /api/service_records/{id}/cheer` | Remove my 🙌. Idempotent → `{cheered: false, cheer_count}` | 404 |
