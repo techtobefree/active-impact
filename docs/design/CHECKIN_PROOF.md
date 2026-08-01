@@ -269,14 +269,48 @@ will just check them in."*
 (P3) — an iPhone user points the built-in camera at the sheet on the wall and
 lands on `#/s/…` in the PWA. No library, no build step, no new dependency (D4).
 
+### 7.1b Scan from the app bar — check in without finding the event first
+
+**(2026-08, founder addition.)** A code already carries its event: a personal QR is
+`#/s/{qr_token}/{event_id}`, an event's is `#/c/{code}`. So a scanner never needs
+to navigate to the right project first — *"you can just click check in at the top
+of the app, because the code you scan has the information on it."*
+
+A **scan button lives in the app bar**, on every screen, and is in practice how
+people will check in. It opens the same `scanQR()` overlay as §7.1 and routes to
+whatever it reads. The per-event **Check in** button stays exactly as it is (§7.1)
+— it is still the right control once you are already looking at the event, and it
+is the one that can fall back to an asserted check-in, because it knows which
+event that would be.
+
+That difference is the whole design of the fallback here: **the app-bar scanner has
+no event context, so it has nothing to fall back to.** Where §7.1 quietly checks
+you in as self-reported, this one has to explain itself instead:
+
+| Outcome | What happens |
+|---|---|
+| a code we recognize | route to `#/s/…` or `#/c/…` — the normal landing |
+| something else scanned | "That isn't an Active Impact code" + scan again |
+| user cancels | back where they came from — a decision, honoured |
+| **no scanner here** (iOS today) | a card explaining the native-camera path: *point your phone's camera at the code and it opens right here* — not a toast, because on Safari this is the permanent answer and it must be readable, not a flash |
+
+It is a real route, `#/scan`, not a modal: deep-linkable, back-button-friendly, and
+the unavailable state is a screen a person can actually read.
+
 ### 7.2 New screens
 
 | Route | Screen |
 |---|---|
 | `#/s/:qr_token/:event_id` | **Peer check-in landing.** "You're checking in with **Ana**" + the event summary + the full waiver + one big confirm. Post-confirm: a ✅ verified state with Check out, mirroring `#/c/{code}` |
+| `#/scan` | **Scan a code** (§7.1b). Opens the camera immediately; explains itself when there is no scanner |
 | `#/events/:id` | Gains **Show my code** for any attendee — a card with the QR (`/my-qr.svg`), the person's name under it, and a "print or hold this up" hint |
 
 `#/c/{code}` (the event-code landing) is untouched.
+
+**Generating** a QR from the app bar is deliberately *not* offered: every code we
+mint belongs to an event (a person's code is per-event too), so there is nothing
+useful to generate without one. Codes are shown where the event is — the lead hub's
+event QR and the event page's **Show my code**.
 
 ### 7.3 Showing the difference
 
