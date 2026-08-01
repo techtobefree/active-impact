@@ -35,7 +35,7 @@
 > (`app.js` mints a guest before first render; a first run lands on `#/log`), the
 > feed-home + log + record-detail views (`public/views/records.js`), the 🙌 cheer
 > toggle, the reframed single **convert** screen (`public/views/auth.js`, reused by
-> the guest Me "create account" card in `public/views/profile.js`), and the 5-item
+> the guest Me "create account" card in `public/views/profile.js`), and the
 > nav + **＋ Log** FAB are all shipped (SW bumped v18 → v19). Covered by
 > `e2e/tests/service_log.spec.js` (first-run → post → feed → cheer → second-guest
 > cheer → convert-keeps-mine → delete). See FRONTEND.md for the router/screens.
@@ -299,8 +299,9 @@ locked, not open. Recorded here so the implementing pass treats them as decision
 3. **Caption cap 280 chars.**
 4. **Report → auto-hide at N=3** distinct reports (tunable constant).
 5. **Handle scheme** = "Adjective Animal" (e.g. "Kind Otter"), server-picked word lists.
-6. **Nav** = 5-item bottom bar (Home / Projects / Catalog / Wallet / Me) + an always-visible
-   **＋ Log** FAB. (Revisit consolidation only if 390px feels tight in build.)
+6. **Nav** = bottom bar + an always-visible **＋ Log** FAB. *(Superseded by FEED.md
+   F2: home IS the projects feed now, so the separate Projects tab is gone and the
+   bar is 4 items — Home / Catalog / Wallet / Me.)*
 7. **Guests may cheer and report** (they always have an identity).
 8. **Rate limits** (implementer to pick sane values): e.g. ≤ ~20 records / guest / hour and
    a modest guest-create-per-IP cap; tune in review.

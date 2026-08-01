@@ -41,7 +41,7 @@ test.describe('Service log on events (the one feed)', () => {
     await page.goto('/');
     await expect(page).toHaveURL(/#\/log$/);           // first run: brand-new guest
     const title = 'Live Cleanup ' + uname('proj');
-    const { id, eventId } = await liveProject(page, title);
+    const { eventId } = await liveProject(page, title);
 
     // "＋ Log to this event" from the event page states the target outright.
     await page.goto(`/#/events/${eventId}`);
