@@ -33,14 +33,20 @@ _IN_WINDOW = (
     f"+ interval '{WINDOW_AFTER}'"
 )
 
-# Great-circle km between the device and the event (haversine in SQL — no
-# PostGIS). NULL on either side yields NULL, which never matches. Params: lat, lat, lon.
-_KM = (
-    "6371 * acos(least(1, greatest(-1, "
+# Great-circle km between the device and the event (haversine in SQL -- no
+# PostGIS). The cosine is computed once in a LATERAL so a missing coordinate on
+# EITHER side stays NULL all the way to distance_km.
+#
+# The clamp is a CASE, deliberately NOT least(1, greatest(-1, v)): Postgres's
+# GREATEST/LEAST *ignore* NULLs, so greatest(-1, NULL) is -1 -- which turned an
+# unlocated event into a confident "20015 km away" (acos(-1) = pi). A CASE
+# propagates the NULL, which is the truth: we do not know how far away it is.
+_COSINE = (
     "sin(radians(%s::double precision)) * sin(radians(e.lat)) + "
     "cos(radians(%s::double precision)) * cos(radians(e.lat)) * "
-    "cos(radians(e.lon) - radians(%s::double precision)))))"
+    "cos(radians(e.lon) - radians(%s::double precision))"
 )
+_KM = "6371 * acos(CASE WHEN d.v > 1 THEN 1 WHEN d.v < -1 THEN -1 ELSE d.v END)"
 
 # Every event in its live window, with the caller's signals and their distance.
 # Ordered so an event the caller has a signal at can never fall off the LIMIT,
@@ -59,7 +65,9 @@ SELECT * FROM (
                    AND pa.user_id = %s) AS participated,
            EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id
                    AND r.user_id = %s) AS rsvped
-    FROM events e JOIN projects p ON p.id = e.project_id
+    FROM events e
+    JOIN projects p ON p.id = e.project_id
+    LEFT JOIN LATERAL (SELECT {_COSINE} AS v) d ON true
     WHERE {_IN_WINDOW}
 ) c
 ORDER BY (c.checked_in OR c.participated OR c.rsvped) DESC,
@@ -70,7 +78,9 @@ LIMIT 100
 
 def candidate_rows(user_id: int, lat: float | None, lon: float | None) -> list[dict]:
     """Every event in its live window, ranked most-likely-first for this caller."""
-    return db.query(_CANDIDATES, (lat, lat, lon, user_id, user_id, user_id))
+    # Positional params bind in TEXT order: the three EXISTS clauses sit in the
+    # SELECT list, the cosine in the LATERAL below it.
+    return db.query(_CANDIDATES, (user_id, user_id, user_id, lat, lat, lon))
 
 
 def reason_for(row: dict) -> str | None:

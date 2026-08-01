@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import db
-from app.matching import MAX_MATCH_KM, resolve_event
+from app.matching import MAX_MATCH_KM, candidate_rows, reason_for, resolve_event
 
 from tests.test_events import make_project
 
@@ -232,3 +232,23 @@ def test_explicit_falls_back_when_the_event_is_stale_and_not_mine(register):
     _, ev = _now_event(ana)
     _shift(ev["id"], days=-30)
     assert resolve_event(ben_u["id"], None, None, explicit_event_id=ev["id"]) == (None, None)
+
+
+# ---- an unlocated event has an UNKNOWN distance, not a confident one --------
+
+def test_an_event_without_coordinates_reports_no_distance(register):
+    """Postgres GREATEST/LEAST ignore NULLs, so the obvious clamp turned an
+    unlocated event into "20015 km away" (acos(-1)). Distance must stay NULL."""
+    client, user, _ = register("ana")
+    _, ev = _now_event(client)  # no coordinates
+    rows = candidate_rows(user["id"], *HERE)
+    assert [r["distance_km"] for r in rows] == [None]
+    assert reason_for(rows[0]) is None
+
+
+def test_no_device_gps_reports_no_distance(register):
+    client, user, _ = register("ana")
+    _, ev = _now_event(client)
+    _set_coords(ev["id"], *HERE)
+    rows = candidate_rows(user["id"], None, None)
+    assert [r["distance_km"] for r in rows] == [None]
