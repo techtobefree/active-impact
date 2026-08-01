@@ -20,6 +20,16 @@
   <header id="topbar" class="hidden">
     <a href="#/" class="brand">🌱 Active Impact</a>
     <span class="spacer"></span>
+    <!-- Scan = check in, from anywhere: the code carries its own event
+         (CHECKIN_PROOF.md §7.1b). A drawn glyph rather than an emoji — this is
+         the most-tapped control in the bar and no emoji reads as "QR code". -->
+    <a href="#/scan" id="scan-btn" class="icon-btn" aria-label="Scan a code to check in" title="Scan to check in">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+        <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/>
+        <rect x="8" y="8" width="8" height="8" rx="1" fill="currentColor"/>
+      </svg>
+    </a>
     <a href="#/wallet" id="balance" class="balance">🪙 0</a>
   </header>
 

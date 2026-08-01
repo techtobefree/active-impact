@@ -36,6 +36,9 @@ const routes = [
   // PEER check-in: a person's code + the event it was shown for. Strict on the
   // event id (it is ours to generate), loose on the token (same reasoning as above).
   [/^#\/s\/([^/]+)\/(\d+)$/, checkin.scanView],
+  // The app bar's scanner — check in from anywhere, because the code carries
+  // its own event (CHECKIN_PROOF.md §7.1b).
+  [/^#\/scan$/, checkin.scanEntryView],
   [/^#\/catalog$/, catalog.listView],
   [/^#\/catalog\/new$/, catalog.newView],
   [/^#\/catalog\/(\d+)$/, catalog.detailView],
@@ -97,16 +100,24 @@ async function _ensureSession() {
 
 // Everyone is signed in (guest or real), so the chrome is always shown. Just
 // pick the active tab and toggle the ＋ Log FAB (feed + record detail only).
+// Where the app-bar scanner should put you back when you cancel it. Tracked from
+// the routes you actually visit, so it works for a tap from anywhere AND for a
+// cold deep link to #/scan (which just falls back home).
+let lastNonScanHash = '#/';
+export function scanReturnHash() { return lastNonScanHash; }
+
 function updateChrome(hash) {
   const topbar = document.getElementById('topbar');
   const nav = document.getElementById('nav');
   const fab = document.getElementById('fab-log');
   topbar.classList.remove('hidden');
   nav.classList.remove('hidden');
+  if (hash !== '#/scan') lastNonScanHash = hash;
   const active = hash.startsWith('#/catalog') ? 'catalog'
     : hash.startsWith('#/wallet') ? 'wallet'
     : (hash.startsWith('#/me') || hash.startsWith('#/u/')) ? 'me'
-    : (hash === '#/login' || hash === '#/register' || hash.startsWith('#/c/') || hash.startsWith('#/s/')) ? ''
+    : (hash === '#/login' || hash === '#/register' || hash === '#/scan'
+       || hash.startsWith('#/c/') || hash.startsWith('#/s/')) ? ''
     : 'home'; // #/, #/projects…, #/events…, #/log, #/r/… — all one feed now
   nav.querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.tab === active));
   // ＋ Log rides along wherever a photo makes sense: the feed, a project, an

@@ -47,6 +47,12 @@ img { max-width: 100%; }
 #topbar .brand { font-weight: 700; font-size: 1.05rem; display: flex; align-items: center; gap: .4rem; }
 #topbar .spacer { flex: 1; }
 #topbar .balance { font-weight: 700; color: var(--green); white-space: nowrap; }
+/* Scan-to-check-in. A 44px hit target (the phone minimum) around a 22px glyph. */
+#topbar .icon-btn {
+  display: grid; place-items: center; width: 44px; height: 44px; margin: -11px 0;
+  color: var(--green); border-radius: 10px;
+}
+#topbar .icon-btn:active { background: color-mix(in srgb, var(--green) 14%, transparent); }
 
 /* ---- layout ---- */
 main { max-width: 640px; margin: 0 auto; padding: 1rem; }

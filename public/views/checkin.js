@@ -13,7 +13,8 @@ import { api } from '../api.js';
 import {
   el, mount, esc, spinner, toast, toastErr, errMessage, fmtDateTime, fmtDuration,
 } from '../ui.js';
-import { refresh, refreshMe } from '../app.js';
+import { scanQR, parseScan } from '../scan.js';
+import { refresh, refreshMe, scanReturnHash } from '../app.js';
 
 export async function checkinView(code) {
   mount(spinner());
@@ -217,4 +218,63 @@ function problemCard(retryFn, e) {
   c.append(retry);
   c.append(el('<a class="act ghost" href="#/">Home</a>'));
   return c;
+}
+
+// ---- #/scan — the app bar's scanner (CHECKIN_PROOF.md §7.1b) ----------------
+//
+// A code carries its own event, so scanning is a complete check-in from anywhere
+// in the app: no need to find the project first. Unlike the per-event Check in
+// button, this one has NO event context, so it cannot fall back to an asserted
+// check-in — where there is no scanner it explains the native-camera path
+// instead.
+
+export async function scanEntryView() {
+  const root = el('<div class="stack"></div>');
+  const card = el('<div class="card stack center"></div>');
+  card.append(el('<h2>Scan a code</h2>'));
+  card.append(el('<p class="muted">Point your camera at someone\'s code, or at the event\'s sign.</p>'));
+  card.append(spinner());
+  root.append(card, el(`<a class="act ghost block" href="${esc(scanReturnHash())}">Cancel</a>`));
+  mount(root);
+
+  // Detached: the scanner stays open for as long as someone holds the camera up,
+  // and the router must never queue behind that (issues/STALE_VIEW_RACE.md).
+  (async () => {
+    const res = await scanQR();
+    if (!root.isConnected) return;      // they left while it was open
+    if (res.text) {
+      const hash = parseScan(res.text);
+      if (hash) { location.hash = hash; return; }
+      mount(scanRetryCard('That isn\'t an Active Impact code.',
+        'Look for the code on someone\'s phone, or the sheet at the check-in table.'));
+      return;
+    }
+    if (res.cancelled) { location.hash = scanReturnHash(); return; }
+    mount(noScannerCard());
+  })();
+}
+
+// Read something, but not ours. Offer another go rather than a dead end.
+function scanRetryCard(title, detail) {
+  const root = el('<div class="stack"></div>');
+  const c = el('<div class="card stack center"></div>');
+  c.append(el(`<h2>${esc(title)}</h2>`));
+  c.append(el(`<p class="muted">${esc(detail)}</p>`));
+  const again = el('<button class="act primary">Scan again</button>');
+  again.onclick = () => scanEntryView();
+  c.append(again);
+  root.append(c, el('<a class="act ghost block" href="#/">Home</a>'));
+  return root;
+}
+
+// No in-app scanner (Safari today). NOT a toast: on this browser it is the
+// permanent answer, and the native-camera path is the actual instruction.
+function noScannerCard() {
+  const root = el('<div class="stack"></div>');
+  const c = el('<div class="card stack center"></div>');
+  c.append(el('<h2>Use your camera app</h2>'));
+  c.append(el('<p class="muted">This browser can\'t scan inside the app — but our codes are ordinary links, so your phone\'s own camera works. Point it at the code and Active Impact will open right here.</p>'));
+  c.append(el('<p class="muted small">On the event page you can also tap <strong>Check in</strong> directly.</p>'));
+  root.append(c, el('<a class="act primary block" href="#/">Home</a>'));
+  return root;
 }
