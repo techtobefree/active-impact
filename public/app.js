@@ -17,12 +17,14 @@ const AUTH = 'auth';
 
 // [regex, viewFn, kind]. Captures pass to the view as args.
 const routes = [
-  [/^#\/$/, records.feedView],                      // HOME = the service feed
+  // HOME is THE feed (FEED.md F2): projects, each carrying its event's photos.
+  [/^#\/$/, projects.listView],
   [/^#\/log$/, records.logView],                    // log a service (photo + caption)
+  [/^#\/log\/(\d+)$/, records.logView],             // …straight to a named event
   [/^#\/r\/(\d+)$/, records.recordView],            // one record (share / deep link)
   [/^#\/login$/, auth.convertView, AUTH],           // "Save your log / Sign in" (convert)
   [/^#\/register$/, auth.convertView, AUTH],        // same convert screen
-  [/^#\/projects$/, projects.listView],             // the service-projects list (was home)
+  [/^#\/projects$/, projects.listView],             // the same screen as #/ (legacy path)
   [/^#\/projects\/new$/, projects.newView],
   [/^#\/projects\/(\d+)$/, projects.detailView],
   // Lead/QR/roster/close/who's-coming are PER-EVENT (a project has many events).
@@ -89,14 +91,18 @@ function updateChrome(hash) {
   const fab = document.getElementById('fab-log');
   topbar.classList.remove('hidden');
   nav.classList.remove('hidden');
-  const active = (hash.startsWith('#/projects') || hash.startsWith('#/events')) ? 'projects'
-    : hash.startsWith('#/catalog') ? 'catalog'
+  const active = hash.startsWith('#/catalog') ? 'catalog'
     : hash.startsWith('#/wallet') ? 'wallet'
     : (hash.startsWith('#/me') || hash.startsWith('#/u/')) ? 'me'
     : (hash === '#/login' || hash === '#/register' || hash.startsWith('#/c/') || hash.startsWith('#/s/')) ? ''
-    : 'home'; // #/, #/log, #/r/…
+    : 'home'; // #/, #/projects…, #/events…, #/log, #/r/… — all one feed now
   nav.querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.tab === active));
-  if (fab) fab.classList.toggle('hidden', !(hash === '#/' || hash.startsWith('#/r/')));
+  // ＋ Log rides along wherever a photo makes sense: the feed, a project, an
+  // event, a record. Not on forms, auth, check-in or the lead hub.
+  const canLog = hash === '#/' || hash === '#/projects'
+    || /^#\/projects\/\d+$/.test(hash) || /^#\/events\/\d+$/.test(hash)
+    || hash.startsWith('#/r/');
+  if (fab) fab.classList.toggle('hidden', !canLog);
   updateBalance(currentUser());
 }
 

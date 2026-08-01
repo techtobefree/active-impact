@@ -218,6 +218,47 @@ input.invalid, textarea.invalid { border-color: var(--red); outline-color: color
 .cheer.primary { background: var(--green); color: var(--green-ink); border-color: var(--green); }
 .cheer .cheer-count { font-weight: 700; }
 
+/* "at Riverside Cleanup · Sat 10:00" — a record's event, one tap away. */
+.record-event { display: block; color: var(--green); font-weight: 600; margin: .1rem 0 .3rem; }
+
+/* ---- the merged feed: an event's photos INSIDE the project card (FEED.md F3) ----
+   Not nested cards — a hairline rule and a two-up grid, so a project scrolls past
+   as one thing: details, then a picture or two, then the next project. */
+.event-records:not(:empty) { margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--line); }
+.record-strip { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.record-strip.one { grid-template-columns: 1fr; }
+.record-mini { min-width: 0; }
+.record-mini-photo { display: block; }
+.record-mini-photo img {
+  display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover;
+  border-radius: 8px; background: var(--bg);
+}
+.record-strip.one .record-mini-photo img { aspect-ratio: 16 / 9; }
+.record-mini-cap {
+  margin: .3rem 0 .1rem; font-size: .88rem; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.record-mini-foot { align-items: center; gap: .35rem; }
+.record-mini-foot .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cheer.small { padding: .15rem .45rem; font-size: .8rem; }
+
+/* The next event up on a project page — findable at a glance. */
+.card.next-up { border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
+.next-up-tag {
+  align-self: flex-start; font-size: .72rem; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--green);
+}
+
+/* "Which event?" picker — the log screen's Change link and the attach affordance. */
+.picker-item {
+  display: flex; width: 100%; text-align: left; align-items: center; gap: .5rem;
+  padding: .6rem .7rem; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); color: var(--ink); font: inherit; cursor: pointer;
+}
+.picker-item:hover { border-color: var(--green); }
+.picker-item.muted { color: var(--muted); justify-content: center; font-weight: 600; }
+
 /* Overflow "⋯" menu (report / delete-if-mine). */
 .menu-wrap { position: relative; flex: none; }
 .menu-btn { padding: .3rem .55rem; }

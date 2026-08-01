@@ -275,6 +275,52 @@ export function addForm({ title, fields, submit = 'Save', onSubmit }) {
   return form;
 }
 
+// ---- where am I? ----
+// Best-effort device position, used to work out which event a logged service
+// belongs to and to pin an event's own coordinates (FEED.md §4/F5). NEVER blocks
+// or nags: a denial, a timeout, or a browser without geolocation all resolve to
+// null, and the check-in / RSVP signals carry the match instead.
+export function getPosition({ timeout = 8000 } = {}) {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    setTimeout(() => done(null), timeout + 500);
+    navigator.geolocation.getCurrentPosition(
+      (p) => done({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => done(null),
+      { enableHighAccuracy: true, timeout, maximumAge: 60_000 },
+    );
+  });
+}
+
+// "📍 Use my location" — pins coordinates onto an event being created or edited,
+// so photos logged there can find it by distance. onSet({lat, lon}) on success.
+export function locationControl(onSet, { pinned = false } = {}) {
+  const wrap = el('<div class="stack"></div>');
+  const btn = el(`<button type="button" class="act ghost block">${pinned ? '📍 Location pinned — update' : '📍 Use my location'}</button>`);
+  const note = el(`<div class="small muted">${pinned
+    ? 'Photos logged nearby will attach to this event automatically.'
+    : 'Optional. Pins where this event is, so photos logged there find it.'}</div>`);
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Locating…';
+    const pos = await getPosition();
+    btn.disabled = false;
+    if (!pos) {
+      btn.textContent = label;
+      note.textContent = "Couldn't get your location — you can still save without it.";
+      return;
+    }
+    onSet(pos);
+    btn.textContent = '📍 Location pinned ✓';
+    note.textContent = 'Photos logged nearby will attach to this event automatically.';
+  };
+  wrap.append(btn, note);
+  return wrap;
+}
+
 // ---- images ----
 // Resize an image file to <=1600px JPEG (q0.8) and return base64 (no data: prefix).
 export function resizeImage(file, maxDim = 1600, quality = 0.8) {

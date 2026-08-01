@@ -1,12 +1,14 @@
-// Service projects: list (Upcoming/Past/Mine + search), detail (durable project
-// + its events), create (project + first event), and the per-EVENT lead hub
-// (QR, roster, who's-coming, close). A project has many events (occurrences);
-// per-user RSVP/check-in/check-out state now lives on the embedded event.
+// Service projects — and THE FEED (FEED.md F2). Home is this list: each project
+// card carries its current event plus that event's latest one or two service
+// photos, in the same card. Also: project detail (its events), create, the event
+// page (details + the event's whole feed), and the per-EVENT lead hub (QR,
+// roster, who's-coming, close). Per-user RSVP/check-in state lives on the event.
 import { api, apiBlobURL, currentUser } from '../api.js';
 import {
   el, esc, mount, clear, addForm, avatarEl, statusPill, emptyState, spinner,
-  toast, toastErr, errMessage, fmtDateTime, fmtDuration, imagesStrip,
+  toast, toastErr, errMessage, fmtDateTime, fmtDuration, imagesStrip, locationControl,
 } from '../ui.js';
+import { recordStrip, recordFeed } from './records.js';
 import { scanQR, parseScan } from '../scan.js';
 import { refresh, refreshMe } from '../app.js';
 
@@ -115,10 +117,12 @@ function actionEl(evt, onDone, { stopNav = false } = {}) {
   return btn;
 }
 
-// A project_card -> a tappable card node: cover on top, then a details-left /
-// action-right row for the embedded event. The button acts in place (re-fetches
-// GET /events/:id) so the current tab and scroll survive, and never navigates
-// (stopNav) despite the <a>. A project with no listable event shows a muted note.
+// A project_card -> a tappable card node: cover on top, a details-left /
+// action-right row for the embedded event, then THE PHOTOS — the newest one or
+// two service records logged at that event, inside this same card (FEED.md F3).
+// The button acts in place (re-fetches GET /events/:id) so the current tab and
+// scroll survive, and never navigates (stopNav) despite the <a>. A project with
+// no listable event shows a muted note.
 function projectCard(p) {
   const card = el(`<a class="card" href="#/projects/${p.id}" style="display:block"></a>`);
   // Prefer the EVENT's own cover (an event with photos shows its cover on the
@@ -152,9 +156,26 @@ function projectCard(p) {
       row.append(details);
     }
     body.append(row);
+    if (evt) body.append(eventRecords(evt));
   };
   renderBody(p.event);
   return card;
+}
+
+// The photos on an event: its latest one or two, plus a way into the rest.
+// Returns an empty fragment-ish node when there is nothing logged yet, so the
+// card simply looks like it always did.
+function eventRecords(evt) {
+  const wrap = el('<div class="event-records"></div>');
+  const strip = recordStrip(evt.records);
+  if (strip) wrap.append(strip);
+  const extra = (evt.record_count || 0) - ((evt.records || []).length);
+  if (extra > 0) {
+    const more = el(`<a class="small muted block" href="#/events/${esc(evt.id)}">+ ${esc(extra)} more from this event</a>`);
+    more.onclick = (e) => { e.stopPropagation(); };  // don't fall through to the project
+    wrap.append(more);
+  }
+  return wrap;
 }
 
 // ---- list -------------------------------------------------------------------
@@ -183,7 +204,9 @@ export async function listView() {
     timer = setTimeout(() => { q = search.value.trim(); load(); }, 250);
   };
 
-  const newBtn = el('<a class="act primary block" href="#/projects/new">＋ New service project</a>');
+  // Home's primary action is the ＋ Log FAB; starting a project is an organizer
+  // move, so it sits here as a quieter control.
+  const newBtn = el('<a class="act ghost block" href="#/projects/new">＋ New service project</a>');
 
   const emptyMsg = () => scope === 'mine'
     ? "You haven't joined or led any projects yet."
@@ -216,6 +239,7 @@ export async function listView() {
 export async function newView() {
   const banner = el('<div class="banner warn">Leaving the waiver blank uses our standard template — not legal advice. Edit it to fit your project.</div>');
 
+  let coords = null; // optional: pins the first event for photo matching (F5)
   const form = addForm({
     title: 'New service project',
     submit: 'Create project',
@@ -233,10 +257,13 @@ export async function newView() {
     ],
     onSubmit: async (body) => {
       if (body.starts_at) body.starts_at = new Date(body.starts_at).toISOString();
+      if (coords) { body.lat = coords.lat; body.lon = coords.lon; }
       const proj = await api('/projects', { body });
       location.hash = '#/projects/' + proj.id;
     },
   });
+  // Sits above the submit button, inside the form's own stack.
+  form.insertBefore(locationControl((p) => { coords = p; }), form.lastElementChild.previousElementSibling);
 
   const root = el('<div class="stack"></div>');
   root.append(banner, form);
@@ -389,19 +416,26 @@ export async function detailView(id) {
   if (!p.events || !p.events.length) {
     root.append(emptyState('No events scheduled yet.'));
   } else {
-    for (const ev of p.events) root.append(eventRow(ev, p.am_leader));
+    // The server orders upcoming ASC then past DESC, so the NEXT ONE UP is the
+    // first not-over event — computed, not assumed to be row one.
+    const nextUp = p.events.find((ev) => !ev.is_over);
+    for (const ev of p.events) {
+      root.append(eventRow(ev, p.am_leader, { nextUp: nextUp && ev.id === nextUp.id }));
+    }
   }
 
   mount(root);
 }
 
-// One event row on the project detail: meta-left, status + action-right, and
-// (leader) a Manage link into the event lead hub. The action refreshes just this
-// row in place (re-fetch GET /events/:id) so scroll + the rest of the page survive.
-function eventRow(event, amLeader) {
-  const card = el('<section class="card stack"></section>');
+// One event row on the project detail: meta-left, status + action-right, this
+// event's latest photos, and (leader) a Manage link into the event lead hub. The
+// NEXT event up is marked and accented. The action refreshes just this row in
+// place (re-fetch GET /events/:id) so scroll + the rest of the page survive.
+function eventRow(event, amLeader, { nextUp = false } = {}) {
+  const card = el(`<section class="card stack${nextUp ? ' next-up' : ''}"></section>`);
   const render = (ev) => {
     clear(card);
+    if (nextUp) card.append(el('<div class="next-up-tag">Next up</div>'));
     const row = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
     // A small leading thumbnail when the event has its own cover photo.
     if (ev.cover_image_id) {
@@ -424,6 +458,8 @@ function eventRow(event, amLeader) {
     }));
     row.append(cell);
     card.append(row);
+    card.append(eventRecords(ev));
+    card.append(el(`<a class="act ghost block" href="#/events/${ev.id}">Open event</a>`));
     if (amLeader) card.append(el(`<a class="act ghost block" href="#/events/${ev.id}/lead">Manage</a>`));
   };
   render(event);
@@ -437,6 +473,7 @@ function addEventControl(id) {
   const openBtn = el('<button class="act primary block">＋ Add event</button>');
   openBtn.onclick = () => {
     clear(wrap);
+    let coords = null;
     const form = addForm({
       title: 'Add event',
       submit: 'Add event',
@@ -449,11 +486,57 @@ function addEventControl(id) {
       ],
       onSubmit: async (body) => {
         if (body.starts_at) body.starts_at = new Date(body.starts_at).toISOString();
+        if (coords) { body.lat = coords.lat; body.lon = coords.lon; }
         await api(`/projects/${id}/events`, { body });
         toast('Event added');
         refresh();
       },
     });
+    form.insertBefore(locationControl((p) => { coords = p; }), form.lastElementChild.previousElementSibling);
+    const cancel = el('<button class="act ghost block">Cancel</button>');
+    cancel.onclick = () => refresh();
+    wrap.append(form, cancel);
+  };
+  wrap.append(openBtn);
+  return wrap;
+}
+
+// Leader control: correct THIS occurrence — when, where, how long, and (the new
+// bit) where exactly, so photos logged nearby attach to it automatically.
+// A datetime-local input needs a LOCAL "YYYY-MM-DDTHH:mm", not an ISO string.
+function localDT(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function editEventControl(ev) {
+  const wrap = el('<div></div>');
+  const openBtn = el('<button class="act ghost block">Edit event</button>');
+  openBtn.onclick = () => {
+    clear(wrap);
+    let coords = (ev.lat != null && ev.lon != null) ? { lat: ev.lat, lon: ev.lon } : null;
+    const form = addForm({
+      title: 'Edit event',
+      submit: 'Save event',
+      fields: [
+        { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true, value: localDT(ev.starts_at) },
+        { name: 'location_text', label: 'Location', required: true, value: ev.location_text },
+        { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: ev.expected_minutes },
+      ],
+      onSubmit: async (body) => {
+        if (body.starts_at) body.starts_at = new Date(body.starts_at).toISOString();
+        if (coords) { body.lat = coords.lat; body.lon = coords.lon; }
+        await api(`/events/${ev.id}`, { method: 'PATCH', body });
+        toast('Event saved');
+        refresh();
+      },
+    });
+    form.insertBefore(
+      locationControl((p) => { coords = p; }, { pinned: coords != null }),
+      form.lastElementChild.previousElementSibling,
+    );
     const cancel = el('<button class="act ghost block">Cancel</button>');
     cancel.onclick = () => refresh();
     wrap.append(form, cancel);
@@ -534,7 +617,7 @@ export async function eventDetailView(eventId) {
   }
 
   if (ev.am_leader) {
-    root.append(el(`<a class="act primary block" href="#/events/${eventId}/lead">Manage event</a>`));
+    root.append(el(`<a class="act ghost block" href="#/events/${eventId}/lead">Manage event</a>`));
   }
 
   // Waiver (collapsed).
@@ -549,6 +632,11 @@ export async function eventDetailView(eventId) {
   if (project.id != null) {
     root.append(el(`<a class="act ghost block" href="#/projects/${esc(project.id)}">View service project</a>`));
   }
+
+  // …and underneath all of it, what people actually did here (FEED.md F9).
+  root.append(el(`<div class="section-label">Logged here${ev.record_count ? ` (${esc(ev.record_count)})` : ''}</div>`));
+  root.append(el(`<a class="act primary block" href="#/log/${esc(eventId)}">＋ Log to this event</a>`));
+  root.append(recordFeed(eventId));
   mount(root);
 }
 
@@ -615,6 +703,7 @@ export async function leadView(eventId) {
   root.append(el(`<div class="row"><a class="muted small grow" href="#/projects/${esc(pid)}">← Back to project</a></div>`));
   root.append(el(`<h1>${esc(project.title)}</h1>`));
   root.append(eventMeta(ev));
+  root.append(editEventControl(ev));
 
   // ---- QR + code ----
   const qrCard = el('<section class="card stack center"></section>');

@@ -6,6 +6,17 @@ import {
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
 import { convertForm } from './auth.js';
+import { myRecords } from './records.js';
+
+// "My log" — everything I've logged, including the entries that matched no event
+// and therefore live only here (FEED.md F7).
+function myLogSection() {
+  const wrap = el('<div class="stack"></div>');
+  wrap.append(el('<div class="section-label">My log</div>'));
+  wrap.append(el('<a class="act ghost block" href="#/log">＋ Log a service</a>'));
+  wrap.append(myRecords());
+  return wrap;
+}
 
 // ---- public profile: #/u/:id ----
 export async function userView(id) {
@@ -143,7 +154,7 @@ function guestMe(me) {
   save.append(convertForm({ onSuccess: () => { toast('Account saved 🎉'); refresh(); } }));
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, save, appearanceCard());
+  root.append(summary, save, appearanceCard(), myLogSection());
   mount(root);
 }
 
@@ -194,6 +205,6 @@ function realMe(me) {
   actions.append(out);
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, editCard, actions);
+  root.append(summary, editCard, actions, myLogSection());
   mount(root);
 }
