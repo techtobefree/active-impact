@@ -1,14 +1,8 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, uemail, uname, findInFeed } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, uemail, uname, findInFeed, dtLocal } = require('../helpers');
 
 // A <input type="datetime-local"> value (viewer-local) offset from now by `days`.
 // Computed (not hard-coded) so "future" stays future whenever the suite runs.
-function dtLocal(days) {
-  const d = new Date(Date.now() + days * 86400e3);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
 // POST /projects seeds the project AND its FIRST event, then lands on the detail.
 // The projects list IS the home feed (FEED.md F2); #/projects is the legacy path.
 async function createProject(page, title, startsLocal) {

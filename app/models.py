@@ -121,6 +121,10 @@ class Event(Base):
     # this photo from?"; a NULL simply means this event never matches by distance.
     lat: Mapped[float | None] = mapped_column(Double)
     lon: Mapped[float | None] = mapped_column(Double)
+    # The shared place this address refers to (LOCATIONS.md L2). location_text
+    # stays the display snapshot; this is the identity, so renaming a venue never
+    # rewrites the wording on a past event's page.
+    location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id", ondelete="SET NULL"))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     checkin_code: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # secrets.token_urlsafe(6)
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -130,7 +134,28 @@ class Event(Base):
         CheckConstraint("status IN ('open', 'completed')", name="status_valid"),
         Index("idx_events_project", "project_id"),
         Index("idx_events_starts", "starts_at"),
+        Index("idx_events_location", "location_id"),
     )
+
+
+class Location(Base):
+    """A remembered address (LOCATIONS.md). Created only as a side effect of an
+    event being scheduled there -- there is no "add a location" flow.
+
+    ``norm`` is the matching key (lowercased, whitespace collapsed, edge
+    punctuation stripped) and is UNIQUE, so the same place typed two ways is one
+    row. ``label`` keeps the FIRST spelling, which is what suggestions offer back.
+    ``lat``/``lon`` are learned from events and photos and never overwritten, so
+    the second event at a venue starts out knowing where it is.
+    """
+    __tablename__ = "locations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(Text, nullable=False)  # as first typed
+    norm: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # matching key
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
 
 
 class ProjectLeader(Base):

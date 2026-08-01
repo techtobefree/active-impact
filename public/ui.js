@@ -126,6 +126,34 @@ export function toastErr(e) { toast(errMessage(e)); }
 // Errors are FIELD-ATTRIBUTED: shown under the exact field, red border, focused.
 // Server errors map back to fields too (422 loc, and known detail codes below).
 
+// Type-ahead on a text field, via a native <datalist>: the browser owns the
+// dropdown, the keyboard handling and the mobile behaviour, and a browser
+// without it just shows a plain input (LOCATIONS.md §5). `fetcher(q)` returns an
+// array of strings. Suggestions are a nicety — a failure never blocks typing.
+let suggestSeq = 0;
+function attachSuggest(input, fetcher, wrap) {
+  const id = 'suggest-' + (++suggestSeq);
+  const list = el(`<datalist id="${id}"></datalist>`);
+  input.setAttribute('list', id);
+  input.setAttribute('autocomplete', 'off'); // ours, not the browser's saved values
+  wrap.append(list);
+
+  let seq = 0;
+  let timer;
+  const paint = async () => {
+    const mine = ++seq;
+    try {
+      const rows = await fetcher(input.value.trim());
+      if (mine !== seq) return;            // a newer keystroke already won
+      list.replaceChildren(...(rows || []).map((r) => el(`<option value="${esc(r)}"></option>`)));
+    } catch { /* offline, or nothing to suggest — leave the field alone */ }
+  };
+  // Focus fills it before a single keystroke, so the venues already in use are
+  // one tap away.
+  input.addEventListener('focus', paint, { once: false });
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(paint, 250); });
+}
+
 // Which known server error codes belong to which form field.
 const FIELD_FOR_CODE = {
   email_taken: 'email',
@@ -165,6 +193,7 @@ export function addForm({ title, fields, submit = 'Save', onSubmit }) {
     for (const [k, v] of Object.entries(f.attrs || {})) input.setAttribute(k, v);
     const msg = el('<div class="field-msg hidden"></div>');
     wrap.append(input);
+    if (f.suggest) attachSuggest(input, f.suggest, wrap);
     if (f.hint) wrap.append(el(`<div class="small muted" style="margin-top:.25rem">${esc(f.hint)}</div>`));
     wrap.append(msg);
     form.append(wrap);

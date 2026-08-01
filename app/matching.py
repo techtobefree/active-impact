@@ -149,10 +149,19 @@ def bootstrap_coords(c, event_id: int, lat: float | None, lon: float | None) -> 
     Leaders will not reliably fill in a map field, so the first person who checks
     in and posts a photo pins the event for everyone after them. Guarded on NULL:
     a leader's own coordinates are never overwritten.
+
+    The event's LOCATION learns it too (LOCATIONS.md L4), so the knowledge outlives
+    this occurrence -- next month's event at the same address is located from the
+    moment it is created.
     """
     if lat is None or lon is None:
         return
-    c.execute(
-        "UPDATE events SET lat = %s, lon = %s WHERE id = %s AND lat IS NULL AND lon IS NULL",
+    from app import locations
+
+    row = c.execute(
+        "UPDATE events SET lat = %s, lon = %s "
+        "WHERE id = %s AND lat IS NULL AND lon IS NULL RETURNING location_id",
         (lat, lon, event_id),
-    )
+    ).fetchone()
+    if row:
+        locations.teach(c, row["location_id"], lat, lon)

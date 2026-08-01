@@ -17,7 +17,10 @@
 > (the personal QR, peer check-in, and what it does and does not prove) ·
 > [FEED.md](./FEED.md) — **one feed**: a logged service belongs to an **event**,
 > and the home screen is the projects feed carrying each event's latest photos
-> (supersedes SERVICE_LOG.md §3's "never link a record to an event")
+> (supersedes SERVICE_LOG.md §3's "never link a record to an event") ·
+> [LOCATIONS.md](./LOCATIONS.md) — the address book the app builds itself: every
+> address typed becomes a **location**, suggested next time, and remembering
+> where it is
 >
 > Known gaps live in [`../issues/`](../issues/).
 >

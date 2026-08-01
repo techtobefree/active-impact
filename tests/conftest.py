@@ -48,6 +48,7 @@ from app.main import app  # noqa: E402
 # off it); follows stays project-scoped.
 _TABLES = [
     "cheers", "reports", "service_records",
+    "locations",
     "audit_log", "token_entries", "catalog_claims", "catalog_items", "participations",
     "rsvps", "waivers", "follows", "events", "project_leaders", "projects", "images",
     "sessions", "users",

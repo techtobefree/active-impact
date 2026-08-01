@@ -81,6 +81,16 @@ async function logoutUI(page) {
   await expect(page).toHaveURL(/#\/login/);
 }
 
+// A datetime-local value N days from now ("YYYY-MM-DDTHH:mm", the input's format).
+// Always use this rather than a literal: the create form rejects a start time more
+// than 12h in the past, so a hardcoded date is a test that passes in the morning
+// and fails at night.
+function dtLocal(days) {
+  const d = new Date(Date.now() + days * 86400e3);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 // Narrow the feed to ONE project by title. The feed pages at 50, and a shared
 // test database fills up, so scanning the whole list for a card is a flake
 // waiting to happen — search first and the assertion is about that project only.
@@ -91,5 +101,5 @@ async function findInFeed(page, title) {
 
 module.exports = {
   shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI,
-  uname, uemail, slug, findInFeed,
+  uname, uemail, slug, findInFeed, dtLocal,
 };

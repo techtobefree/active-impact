@@ -3,12 +3,21 @@ const { shot, expectNoGenericError, registerUI, loginUI, uname, uemail } = requi
 
 test.describe('Wallet & profile', () => {
   test('a broke user tipping is told they lack tokens (not a generic error)', async ({ page }, testInfo) => {
+    // Bring our own recipient: tipping a seeded address made this test quietly
+    // depend on `python scripts/seed.py` having been run, and a missing recipient
+    // fails as user_not_found — a different error than the one under test.
+    const recipient = uemail('payee');
+    await registerUI(page, recipient, 'password123', 'Payee');
+    // Become a different person: clearing storage alone leaves no session at all,
+    // so reload and let boot mint a fresh guest to convert from.
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
     await registerUI(page, uemail('broke'), 'password123', 'Broke Tester');
     await page.goto('/#/wallet');
     await expect(page.getByText(/your balance/i)).toBeVisible();
     await shot(page, testInfo, 'wallet-empty');
 
-    await page.locator('input[name=to_email]').fill('ana@example.com');
+    await page.locator('input[name=to_email]').fill(recipient);
     await page.locator('input[name=amount]').fill('1');
     await page.getByRole('button', { name: /tip/i }).click();
     // The error must explain the real reason, attributed to the amount field.

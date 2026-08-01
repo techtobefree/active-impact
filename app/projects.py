@@ -18,7 +18,7 @@ import psycopg
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, field_validator
 
-from app import db, serializers
+from app import db, locations, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 
@@ -183,12 +183,19 @@ def _is_following(project_id: int, user_id: int) -> bool:
 
 def insert_event(c, project_id: int, location_text: str, starts_at, expected_minutes: int,
                  lat: float | None = None, lon: float | None = None) -> dict:
-    """Insert one event (occurrence) with a fresh check-in code, status 'open'."""
+    """Insert one event (occurrence) with a fresh check-in code, status 'open'.
+
+    The address is remembered as a ``location`` (LOCATIONS.md) and, when that
+    venue already knows where it is, this event inherits its coordinates -- so
+    photos logged there attach themselves with nobody touching a map.
+    """
+    location_id, lat, lon = locations.apply_to_event(c, location_text, lat, lon)
     return c.execute(
-        "INSERT INTO events(project_id, location_text, starts_at, expected_minutes, "
-        "lat, lon, checkin_code, status) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, 'open') RETURNING *",
-        (project_id, location_text, starts_at, expected_minutes, lat, lon, new_code()),
+        "INSERT INTO events(project_id, location_text, location_id, starts_at, "
+        "expected_minutes, lat, lon, checkin_code, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'open') RETURNING *",
+        (project_id, location_text, location_id, starts_at, expected_minutes,
+         lat, lon, new_code()),
     ).fetchone()
 
 

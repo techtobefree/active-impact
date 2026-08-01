@@ -14,6 +14,14 @@ import { refresh, refreshMe } from '../app.js';
 
 // ---- shared helpers ---------------------------------------------------------
 
+// Address type-ahead: the venues this community already uses (LOCATIONS.md §5).
+// Typing one we recognize also hands the event that venue's coordinates, so
+// photos logged there attach themselves — all server-side, nothing to wire here.
+async function suggestLocations(q) {
+  const rows = await api('/locations' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+  return (rows || []).map((l) => l.label);
+}
+
 function errNode(e) {
   return el(`<div class="empty">${esc(errMessage(e))}</div>`);
 }
@@ -246,7 +254,7 @@ export async function newView() {
     fields: [
       { name: 'title', label: 'Title', required: true },
       { name: 'description', label: 'Description', type: 'textarea', placeholder: 'What are you doing, and what should volunteers bring?' },
-      { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet', hint: 'The first event is created here — you can add more events later.' },
+      { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet', suggest: suggestLocations, hint: 'The first event is created here — you can add more events later.' },
       { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true, hint: 'When the first event begins.',
         // A finger-slip on the date wheels (wrong year / AM-PM) would create a
         // first event that never shows under "Upcoming" — flag it before submit.
@@ -481,7 +489,7 @@ function addEventControl(id) {
         { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true,
           validate: (v) => (new Date(v).getTime() < Date.now() - 12 * 3600e3
             ? 'This start time is in the past — double-check the date.' : null) },
-        { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet' },
+        { name: 'location_text', label: 'Location', required: true, placeholder: 'Where to meet', suggest: suggestLocations },
         { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: 120, placeholder: '120' },
       ],
       onSubmit: async (body) => {
@@ -522,7 +530,7 @@ function editEventControl(ev) {
       submit: 'Save event',
       fields: [
         { name: 'starts_at', label: 'Starts at', type: 'datetime-local', required: true, value: localDT(ev.starts_at) },
-        { name: 'location_text', label: 'Location', required: true, value: ev.location_text },
+        { name: 'location_text', label: 'Location', required: true, value: ev.location_text, suggest: suggestLocations },
         { name: 'expected_minutes', label: 'Expected minutes', type: 'number', required: true, min: 1, step: 1, value: ev.expected_minutes },
       ],
       onSubmit: async (body) => {

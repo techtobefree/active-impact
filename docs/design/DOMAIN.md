@@ -16,7 +16,9 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── projects (owner) ──┬── project_leaders   (organizers; manage the project + all its events)
         │                      ├── waivers           (versioned, immutable text; project-scoped)
         │                      ├── follows           (interest / bookmark; drives follower_count)
-        │                      └── events ──┬── rsvps          (RSVP intent; is_leader = event-leader
+        │                      └── events ──┬── location       (LOCATIONS.md: the remembered address,
+        │                                    │                   upserted from location_text; learns lat/lon)
+        │                                    ├── rsvps          (RSVP intent; is_leader = event-leader
         │                        (occurrence)│                  DESIGNATION, a flag with no powers yet)
         │                                    ├── participations (check-in/out; the WAIVER SIGNATURE;
         │                                    │                   source of minutes → tokens)
@@ -165,8 +167,9 @@ CREATE TABLE IF NOT EXISTS events (
   expected_minutes INTEGER NOT NULL CHECK (expected_minutes > 0),
   location_text    TEXT NOT NULL,              -- free text; maps/geocoding deferred
   lat              DOUBLE PRECISION,           -- where it actually is (FEED.md F5): set by a
-  lon              DOUBLE PRECISION,           -- leader, or bootstrapped from the first matched
-                                               -- record's GPS. NULL = unknown (no geo matching)
+  lon              DOUBLE PRECISION,           -- leader, bootstrapped from the first matched record's
+                                               -- GPS, or inherited from its LOCATION. NULL = unknown
+  location_id      INTEGER REFERENCES locations(id) ON DELETE SET NULL,  -- the shared place (LOCATIONS.md)
   status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'completed')),
   checkin_code     TEXT NOT NULL UNIQUE,       -- secrets.token_urlsafe(6); regenerable
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -263,6 +266,22 @@ CREATE TABLE IF NOT EXISTS attestations (
 );
 CREATE INDEX IF NOT EXISTS idx_attestations_event   ON attestations(event_id);
 CREATE INDEX IF NOT EXISTS idx_attestations_subject ON attestations(subject_user_id);
+
+-- ---- locations (LOCATIONS.md) -----------------------------------------------
+-- The address book the app builds itself: every address typed on an event upserts
+-- a row here, matched on `norm`. There is no "create a location" flow. lat/lon are
+-- LEARNED (from an event, or from a photo's GPS) and never overwritten, so the
+-- second event at a venue is located from the moment it is created.
+CREATE TABLE IF NOT EXISTS locations (
+  id         SERIAL PRIMARY KEY,
+  label      TEXT NOT NULL,                    -- as first typed; what suggestions offer back
+  norm       TEXT NOT NULL UNIQUE,             -- lower(collapsed ws, edge punctuation stripped)
+  lat        DOUBLE PRECISION,
+  lon        DOUBLE PRECISION,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_events_location ON events(location_id);
 
 -- ---- impact tokens ----------------------------------------------------------
 
@@ -494,6 +513,7 @@ volunteers (flat rate is intent).
 | I13 | An `attestations` row always names two **different** users (CHECK) and is unique per (event, scanner, subject) — a repeat scan is a no-op, never an error |
 | I14 | A scan never creates a participation for the **subject**; the scanner's participation always carries a `waiver_id` from the event's project (I6 holds for every row, however created) |
 | I15 | `participations.attested` is true ⟺ an attestation for that (event, user) existed at or before the participation was written — set at insert, and flipped by a later scan only on a participation that is still open |
+| L-I1…L-I6 | The location invariants — one row per normalized address, coordinates that flow both ways and are never overwritten, prefix-first suggestions that never expose a position. Stated and tested in [LOCATIONS.md § 6](./LOCATIONS.md#6-invariants) |
 | F-I1…F-I9 | The one-feed invariants — event matching, the ≤2 records per card, and "coordinates are never served". Stated and tested in [FEED.md § 9](./FEED.md#9-invariants-the-test-suite-asserts-these) |
 
 ## Standard read shapes (used by API.md)
@@ -521,6 +541,8 @@ volunteers (flat rate is intent).
   own images (entity `'event'`); the event's project leaders manage them. Used
   inside project detail, returned by `POST /api/projects/{id}/events`, and by the
   event-scoped endpoints.
+- **location_suggestion** (LOCATIONS.md §3): `id, label, event_count` — never
+  `lat`/`lon`.
 - **event_candidate** (FEED.md §4, the "which event am I at?" picker):
   `event_id, project_id, project_title, starts_at, location_text,
   distance_km|null, reason`.

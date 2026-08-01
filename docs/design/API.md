@@ -176,6 +176,18 @@ delete; no admin UI yet (unhide is a manual DB flag). The 10 MB image cap, the
 content-type allowlist, the caption cap, and the per-hour rate limit are the spam
 floor.
 
+## Locations — `app/locations.py`
+
+The address book the app builds itself (LOCATIONS.md). Every `location_text` sent
+to an event writer upserts a location, matched on a normalized key, and links the
+event to it; an event with no coordinates **inherits the venue's**, which is what
+makes FEED.md's `nearby` matching work for a brand-new event at a known address.
+There is no create/update/delete surface — the list is a side effect.
+
+| Endpoint | Notes | Errors |
+|---|---|---|
+| `GET /api/locations` | `?q=` → **location_suggestion[]** (`id, label, event_count`), max 10. Prefix matches first, then substring; most-used first within each, then most recently used. No `q` → the venues most in use, so focusing an empty address field already helps. Matching is case- and spacing-insensitive; **coordinates are never served** (L5) | — |
+
 ## Images — `app/images.py`
 
 | Endpoint | Notes | Errors |

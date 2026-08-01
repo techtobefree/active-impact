@@ -23,7 +23,7 @@ from pydantic import BaseModel, field_validator
 
 from datetime import datetime
 
-from app import audit, db, matching, serializers
+from app import audit, db, locations, matching, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.projects import current_waiver, is_leader, new_code
@@ -196,11 +196,23 @@ def update_event(
     Project-wide fields (title/description/waiver) stay on the project; this is
     the per-occurrence counterpart, and the only way to pin lat/lon for matching.
     """
-    _require_leader(event_id, user["id"])
+    ev = _require_leader(event_id, user["id"])
     data = body.model_dump(exclude_unset=True)
     if data:
-        sets = ", ".join(f"{k} = %s" for k in data)
         with db.tx() as c:
+            # An address is also a LOCATION (LOCATIONS.md): a changed one re-links
+            # this event, and either teaches that venue where it is or inherits
+            # coordinates it already knows.
+            lat = data.get("lat", ev["lat"])
+            lon = data.get("lon", ev["lon"])
+            if "location_text" in data:
+                loc_id, lat2, lon2 = locations.apply_to_event(c, data["location_text"], lat, lon)
+                data["location_id"] = loc_id
+                if (lat2, lon2) != (lat, lon):
+                    data["lat"], data["lon"] = lat2, lon2
+            else:
+                locations.teach(c, ev["location_id"], lat, lon)
+            sets = ", ".join(f"{k} = %s" for k in data)
             c.execute(
                 f"UPDATE events SET {sets}, updated_at = now() WHERE id = %s",
                 list(data.values()) + [event_id],
