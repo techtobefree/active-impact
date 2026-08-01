@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, uname, uemail } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, uname, uemail, findInFeed } = require('../helpers');
 
 test.describe('Projects', () => {
   test('create a project, open the event lead hub, self check-in via the waiver, and check out', async ({ page }, testInfo) => {
@@ -59,6 +59,7 @@ test.describe('Projects', () => {
 
     await page.goto('/#/projects');
     await page.getByRole('button', { name: /^mine$/i }).click();
+    await findInFeed(page, title);
     await expect(page.getByRole('link', { name: title })).toBeVisible();
     await shot(page, testInfo, 'mine-tab');
     await expectNoGenericError(page);

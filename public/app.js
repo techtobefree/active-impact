@@ -65,7 +65,19 @@ export async function refreshMe() {
 // Ensure we hold a valid session — validating an existing token, else silently
 // creating a GUEST (SERVICE_LOG.md §4). Returns true when a FRESH guest was just
 // created (a first run / after an expiry), false for an already-valid session.
-export async function ensureSession() {
+//
+// SINGLE-FLIGHT: boot calls this, and so does the router when a route arrives
+// before boot has finished (a QR deep link on a first run). Sharing the one
+// in-flight promise means that never mints two guests.
+let sessionInFlight = null;
+export function ensureSession() {
+  if (!sessionInFlight) {
+    sessionInFlight = _ensureSession().finally(() => { sessionInFlight = null; });
+  }
+  return sessionInFlight;
+}
+
+async function _ensureSession() {
   if (getToken()) {
     const me = await refreshMe(); // validates; a dead token (401) is cleared here
     if (me) return false;
@@ -144,8 +156,20 @@ export function render() {
     // A guest stays put (do NOT redirect a guest away from convert).
     if (getToken() && me && me.is_guest === false) { location.hash = '#/'; return queue; }
   } else if (!getToken()) {
-    // Truly token-less (a transient boot edge): stash + go to the convert screen.
-    stashReturn(hash); location.hash = '#/login'; return queue;
+    // No token YET. On a first run the guest mint is usually still in flight —
+    // a scanned QR opens the app and the deep link can beat it — so WAIT for the
+    // session instead of bouncing to the convert screen. Being asked to sign up
+    // because the network was slow is the exact friction guests exist to remove.
+    window.scrollTo(0, 0);
+    updateChrome(hash);
+    const groups = hash.match(re).slice(1);
+    const gated = async () => {
+      await ensureSession();
+      if (getToken()) return runView(view, groups);
+      stashReturn(hash); location.hash = '#/login';  // genuinely offline
+    };
+    queue = queue.then(gated, gated);
+    return queue;
   }
   // The chrome is synchronous, so it moves with the tap rather than waiting in
   // the queue behind a slow fetch.

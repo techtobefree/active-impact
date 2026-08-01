@@ -81,6 +81,15 @@ async function logoutUI(page) {
   await expect(page).toHaveURL(/#\/login/);
 }
 
+// Narrow the feed to ONE project by title. The feed pages at 50, and a shared
+// test database fills up, so scanning the whole list for a card is a flake
+// waiting to happen — search first and the assertion is about that project only.
+async function findInFeed(page, title) {
+  await page.locator('#view input[type=search]').fill(title);
+  await page.waitForTimeout(400); // the search box debounces at 250ms
+}
+
 module.exports = {
-  shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI, uname, uemail, slug,
+  shot, expectNoGenericError, formError, fieldError, registerUI, loginUI, logoutUI,
+  uname, uemail, slug, findInFeed,
 };

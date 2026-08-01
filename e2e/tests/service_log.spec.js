@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, uname, uemail } = require('../helpers');
+const { shot, expectNoGenericError, uname, uemail, findInFeed } = require('../helpers');
 
 // A valid 1×1 PNG (resizeImage draws it onto a canvas, so it must decode).
 const PNG_1x1 = Buffer.from(
@@ -62,6 +62,7 @@ test.describe('Service log on events (the one feed)', () => {
     // …and the SAME photo now rides on the project's card in the home feed —
     // the merge, end to end (FEED.md F2/F3).
     await page.goto('/#/');
+    await findInFeed(page, title);
     const card = page.locator('#view .card', { hasText: title }).first();
     await expect(card.locator('.record-strip')).toBeVisible();
     await expect(card.locator('.record-mini-cap').first()).toContainText(caption);

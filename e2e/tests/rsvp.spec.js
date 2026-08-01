@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, uemail, uname } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, uemail, uname, findInFeed } = require('../helpers');
 
 // A <input type="datetime-local"> value (viewer-local) offset from now by `days`.
 // Computed (not hard-coded) so "future" stays future whenever the suite runs.
@@ -85,6 +85,7 @@ test.describe('RSVP flow', () => {
     await expect(page).toHaveURL(/#\/projects$/);
 
     // Find the card and RSVP straight from the list (its embedded event action).
+    await findInFeed(page, title);
     const card = page.locator('a.card', { hasText: title });
     await expect(card).toBeVisible();
     await card.getByRole('button', { name: /^rsvp$/i }).click();
@@ -194,12 +195,14 @@ test.describe('RSVP flow', () => {
 
     await page.goto('/#/projects');
     await expect(page).toHaveURL(/#\/projects$/);
+    await findInFeed(page, title);
     // Upcoming (default) must NOT list an ended event.
     await expect(page.locator('a.card', { hasText: title })).toHaveCount(0);
     await shot(page, testInfo, 'upcoming-excludes-ended');
 
     // Past tab lists it.
     await page.getByRole('button', { name: /^past$/i }).click();
+    await findInFeed(page, title);
     await expect(page.locator('a.card', { hasText: title })).toBeVisible();
     await shot(page, testInfo, 'past-includes-ended');
     await expectNoGenericError(page);
