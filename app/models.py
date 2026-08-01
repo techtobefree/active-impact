@@ -18,6 +18,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Double,
     ForeignKey,
     Index,
     Integer,
@@ -115,6 +116,11 @@ class Event(Base):
     starts_at: Mapped[datetime] = mapped_column(TS, nullable=False)
     expected_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
     location_text: Mapped[str] = mapped_column(Text, nullable=False)  # free text; geocoding deferred
+    # Where the event actually is (FEED.md F5). NULL until a leader pins it or the
+    # first matched record's GPS bootstraps it. Only used to answer "which event is
+    # this photo from?"; a NULL simply means this event never matches by distance.
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     checkin_code: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # secrets.token_urlsafe(6)
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
@@ -350,16 +356,34 @@ class Image(Base):
 
 
 class ServiceRecord(Base):
-    """A single logged act of service: one photo + one caption, standalone."""
+    """A single logged act of service: one photo + one caption, logged AT an event.
+
+    ``event_id`` is the merge of the two feeds (FEED.md F1): the server resolves
+    which event this happened at from the author's check-in / RSVP / GPS + time
+    (app/matching.py), and the event's project card then carries the photo.
+    NULL means nothing matched -- the record is the author's own log entry until
+    they attach it. Never rejected, never lost.
+    """
     __tablename__ = "service_records"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # author (guest or real)
     caption: Mapped[str] = mapped_column(Text, nullable=False)  # 1-280 chars (validated in the handler)
     hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")  # moderation (§9)
+    # SET NULL, never CASCADE: deleting an event must not delete the photos people
+    # took there -- they fall back to unattached, like a record that never matched.
+    event_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="SET NULL"))
+    # The author's position at log time. A MATCHING INPUT ONLY -- no read shape
+    # ever serves these (FEED.md F6). A caption is public; coordinates are not.
+    lat: Mapped[float | None] = mapped_column(Double)
+    lon: Mapped[float | None] = mapped_column(Double)
+    # How event_id was chosen: explicit|checked_in|participated|rsvp|nearby|NULL.
+    # Kept so the guess can be audited and tuned; never served.
+    match_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         Index("idx_service_records_created", text("created_at DESC")),
         Index("idx_service_records_user", "user_id"),
+        Index("idx_service_records_event", "event_id", text("created_at DESC")),
     )
 
 
