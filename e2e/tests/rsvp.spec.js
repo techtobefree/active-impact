@@ -10,7 +10,7 @@ function dtLocal(days) {
 }
 
 // POST /projects seeds the project AND its FIRST event, then lands on the detail.
-// The projects list now lives at #/projects (the home feed is the service log).
+// The projects list IS the home feed (FEED.md F2); #/projects is the legacy path.
 async function createProject(page, title, startsLocal) {
   await page.goto('/#/projects');
   await page.getByRole('link', { name: /new service project/i }).click();

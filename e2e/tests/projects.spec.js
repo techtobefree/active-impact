@@ -6,7 +6,7 @@ test.describe('Projects', () => {
     await registerUI(page, uemail('proj'), 'password123', 'Project Host');
     await shot(page, testInfo, 'home');
 
-    // The projects list is no longer the home feed — it lives at #/projects.
+    // The projects list IS the home feed again (FEED.md F2); #/projects still works.
     await page.goto('/#/projects');
 
     // Create a service project (POST /projects seeds its first event; expected_minutes defaults to 120).

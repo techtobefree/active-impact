@@ -115,29 +115,45 @@ function errorCard(e) {
   return card;
 }
 
-export async function render() {
+// Views are SERIALIZED. Every view fetches first and mounts second, so two
+// overlapping renders race to paint: tap a project card and then a nav tab, and
+// the card's slower page can land on top of the tab you actually chose. Queueing
+// the view calls means the newest render always mounts last. (Correcting it
+// afterwards instead — re-rendering when the hash moved — is worse: it wipes a
+// form the user has already typed into.) Nothing ever awaits render(), so the
+// queue cannot deadlock; a rejected render still passes the baton on.
+let queue = Promise.resolve();
+
+async function runView(view, groups) {
+  try {
+    await view(...groups);
+  } catch (e) {
+    if (e && e.sessionExpired) { location.hash = '#/login'; return; } // dead session mid-load
+    mount(errorCard(e));
+  }
+}
+
+export function render() {
   const hash = location.hash || '#/';
   const match = routes.find(([re]) => re.test(hash));
-  if (!match) { location.hash = '#/'; return; }
+  if (!match) { location.hash = '#/'; return queue; }
   const [re, view, kind] = match;
   const me = currentUser();
   if (kind === AUTH) {
     // The convert screen: a real (non-guest) account is already saved -> home.
     // A guest stays put (do NOT redirect a guest away from convert).
-    if (getToken() && me && me.is_guest === false) { location.hash = '#/'; return; }
+    if (getToken() && me && me.is_guest === false) { location.hash = '#/'; return queue; }
   } else if (!getToken()) {
     // Truly token-less (a transient boot edge): stash + go to the convert screen.
-    stashReturn(hash); location.hash = '#/login'; return;
+    stashReturn(hash); location.hash = '#/login'; return queue;
   }
+  // The chrome is synchronous, so it moves with the tap rather than waiting in
+  // the queue behind a slow fetch.
   window.scrollTo(0, 0);
   updateChrome(hash);
   const groups = hash.match(re).slice(1);
-  try {
-    await view(...groups);
-  } catch (e) {
-    if (e && e.sessionExpired) { location.hash = '#/login'; return; } // view load with a dead session
-    mount(errorCard(e));
-  }
+  queue = queue.then(() => runView(view, groups), () => runView(view, groups));
+  return queue;
 }
 
 // re-run the current route (in-place refresh after a mutation)

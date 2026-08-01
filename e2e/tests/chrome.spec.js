@@ -15,10 +15,9 @@ test.describe('Chrome (top bar + bottom nav)', () => {
 
     // Click every tab in turn (hashchange, no reload) — asserting after EACH hop,
     // because the bug flipped the chrome on alternate navigations. Selected by
-    // data-tab: the 5-item bar (Home/Projects/Catalog/Wallet/Me) has overlapping
-    // words ("Home" contains "me"), so a name regex would be ambiguous.
+    // data-tab: the 4-item bar (Home/Catalog/Wallet/Me) has overlapping words
+    // ("Home" contains "me"), so a name regex would be ambiguous.
     const hops = [
-      ['projects', /#\/projects$/],
       ['catalog', /#\/catalog$/],
       ['wallet', /#\/wallet$/],
       ['me', /#\/me$/],

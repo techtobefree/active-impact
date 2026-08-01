@@ -57,7 +57,12 @@ const routes = [
   [/^#\/me$/,                  views.myProfile],
   [/^#\/u\/([\w-]+)$/,         views.profile],
 ];
-// render(): match hash (default '#/'), auth-gate, call view(...groups)
+// render(): match hash (default '#/'), auth-gate, chrome — all synchronous — then
+// QUEUE the view call. Views fetch-then-mount, so overlapping renders race to
+// paint and a slow one lands on top of the screen you actually chose; serializing
+// the async half means the newest render always mounts last, without ever
+// repainting (and wiping) a form the user has started filling in.
+// See ../issues/STALE_VIEW_RACE.md. Rule: never `await refresh()` inside a view.
 window.addEventListener('hashchange', render);
 ```
 
