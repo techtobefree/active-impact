@@ -1,5 +1,5 @@
 // Profile views: public profile (#/u/:id) + my profile/edit (#/me).
-import { api, currentUser, getToken, setSession, clearSession } from '../api.js';
+import { api, currentUser, getToken, setSession, clearSession, clearReturn } from '../api.js';
 import {
   el, esc, mount, addForm, avatarEl, spinner, toast,
   fmtDate, emptyState, errMessage, isStandalone, doInstall,
@@ -196,6 +196,7 @@ function realMe(me) {
     out.disabled = true;
     try { await api('/auth/logout', { method: 'POST' }); } catch { /* sign out locally regardless */ }
     clearSession();
+    clearReturn();   // a deliberate sign-out ends wherever we were headed
     // Stay "always signed in": drop back to a fresh guest, then to the convert
     // screen so the just-signed-out user can sign back in (SERVICE_LOG.md §4/C5).
     try { const d = await api('/auth/guest', { method: 'POST' }); setSession(d.token, d.user); } catch { /* offline */ }

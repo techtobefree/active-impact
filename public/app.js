@@ -146,6 +146,10 @@ function errorCard(e) {
 // form the user has already typed into.) Nothing ever awaits render(), so the
 // queue cannot deadlock; a rejected render still passes the baton on.
 let queue = Promise.resolve();
+// Has any route painted yet? Boot uses this: on a slow connection a hashchange
+// (or a deep link) can render BEFORE the guest mint finishes, and boot's own
+// render() would then wipe a form the user has already started typing into.
+let hasRendered = false;
 
 async function runView(view, groups) {
   try {
@@ -158,6 +162,7 @@ async function runView(view, groups) {
 
 export function render() {
   const hash = location.hash || '#/';
+  hasRendered = true;
   const match = routes.find(([re]) => re.test(hash));
   if (!match) { location.hash = '#/'; return queue; }
   const [re, view, kind] = match;
@@ -236,7 +241,9 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
     if (location.hash === '#/log') render(); else location.hash = '#/log';
   } else if (!location.hash) {
     location.hash = '#/';
-  } else {
+  } else if (!hasRendered) {
+    // Only if nothing painted while the session was being minted — re-rendering
+    // over a screen the user is already using would throw away their typing.
     render();
   }
 })();

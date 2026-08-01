@@ -22,6 +22,9 @@ export function popReturn() {
   return r && r !== '#/login' && r !== '#/register' ? r : '#/';
 }
 export function peekReturn() { return sessionStorage.getItem(RETURN_KEY); }
+// Signing out ENDS the previous journey: a return-to stashed by an expiry back
+// then must not drag the next person who signs in on this device to that screen.
+export function clearReturn() { sessionStorage.removeItem(RETURN_KEY); }
 
 // api(path, {method, body}) -> parsed JSON (or null on 204).
 // Throws {status, detail} on non-2xx, {offline:true} on network failure.
