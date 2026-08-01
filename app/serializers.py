@@ -106,11 +106,13 @@ def event_is_over(event: dict) -> bool:
 def event_state_maps(event_ids: list[int], user_id: int) -> dict[int, dict]:
     """Batch per-event/per-user action state for a set of event ids (no N+1).
 
-    Returns {event_id: {checked_in_count, my_rsvp, my_open_participation,
-    my_hours_here}} -- exactly the fields event_card overlays onto an event row.
+    Returns {event_id: {checked_in_count, record_count, records, my_rsvp,
+    my_open_participation, my_hours_here}} -- exactly the fields event_card
+    overlays onto an event row.
     """
     if not event_ids:
         return {}
+    record_map = event_record_maps(event_ids, user_id)
     count_map = {
         r["event_id"]: r["c"]
         for r in db.query(
@@ -158,6 +160,7 @@ def event_state_maps(event_ids: list[int], user_id: int) -> dict[int, dict]:
             "my_rsvp": rsvp_map.get(eid),
             "my_open_participation": open_map.get(eid),
             "my_hours_here": round(int(hours_map.get(eid, 0)) / 60, 1),
+            **record_map[eid],
         }
         for eid in event_ids
     }
@@ -187,6 +190,10 @@ def event_card(event: dict | None, state: dict) -> dict | None:
         "is_over": event_is_over(event),
         "cover_image_id": cover_image_id("event", event["id"]),
         "checked_in_count": int(st["checked_in_count"]),
+        # What people logged here. The FEED (F3): the two newest photos ride along
+        # on the card, so a project scrolls past with its own event's pictures.
+        "record_count": int(st["record_count"]),
+        "records": st["records"],
         "my_rsvp": st["my_rsvp"],
         "my_open_participation": st["my_open_participation"],
         "my_hours_here": st["my_hours_here"],
@@ -202,6 +209,10 @@ def event_detail(event: dict | None, state: dict, am_leader: bool) -> dict | Non
     card = event_card(event, state)
     if card is not None:
         eid = event["id"]
+        # The only shape that serves coordinates, so a leader can see and correct
+        # what a record's GPS will be matched against (FEED.md F6).
+        card["lat"] = event["lat"]
+        card["lon"] = event["lon"]
         card["cover_image_id"] = cover_image_id("event", eid)
         card["image_ids"] = [
             r["id"]
@@ -292,11 +303,37 @@ def record_photo_maps(record_ids: list[int]) -> dict[int, int | None]:
     return {r["entity_id"]: r["id"] for r in rows}
 
 
-def record_card(record: dict, author: dict, cheer: dict, photo_image_id: int | None) -> dict:
+def record_event_maps(event_ids: list[int]) -> dict[int, dict]:
+    """Batch the event summary a record_card carries: which event, whose project."""
+    ids = [e for e in dict.fromkeys(event_ids) if e is not None]
+    if not ids:
+        return {}
+    return {
+        r["id"]: {
+            "id": r["id"],
+            "project_id": r["project_id"],
+            "project_title": r["project_title"],
+            "starts_at": r["starts_at"],
+        }
+        for r in db.query(
+            "SELECT e.id, e.project_id, e.starts_at, p.title AS project_title "
+            "FROM events e JOIN projects p ON p.id = e.project_id WHERE e.id = ANY(%s)",
+            (ids,),
+        )
+    }
+
+
+def record_card(
+    record: dict, author: dict, cheer: dict, photo_image_id: int | None,
+    event: dict | None = None,
+) -> dict:
     """The feed/detail read shape for a service record.
 
     ``author`` must carry ``email`` (to derive ``is_guest``) -- the email itself
-    is NEVER exposed. ``cheer`` is one entry from record_cheer_maps.
+    is NEVER exposed, and neither are the record's ``lat``/``lon``/``match_reason``
+    (FEED.md F6: a caption is public, coordinates are not). ``cheer`` is one entry
+    from record_cheer_maps; ``event`` one from record_event_maps (None = the
+    record matched nothing and is its author's own log entry).
     """
     return {
         "id": record["id"],
@@ -310,4 +347,70 @@ def record_card(record: dict, author: dict, cheer: dict, photo_image_id: int | N
         "created_at": record["created_at"],
         "cheer_count": int(cheer["cheer_count"]),
         "i_cheered": bool(cheer["i_cheered"]),
+        "event": event,
+    }
+
+
+def record_cards(rows: list[dict], user_id: int) -> list[dict]:
+    """Assemble record_cards for a set of service_records rows, fully batched.
+
+    The one place authors, cheers, photos and events are gathered -- used by the
+    record feed, an event's feed, and the project cards' embedded photos, so all
+    three emit identical JSON with no N+1.
+    """
+    if not rows:
+        return []
+    ids = [r["id"] for r in rows]
+    authors = {
+        a["id"]: a
+        for a in db.query(
+            "SELECT id, display_name, email FROM users WHERE id = ANY(%s)",
+            (list({r["user_id"] for r in rows}),),
+        )
+    }
+    cheer = record_cheer_maps(ids, user_id)
+    photos = record_photo_maps(ids)
+    events = record_event_maps([r["event_id"] for r in rows])
+    return [
+        record_card(
+            r, authors[r["user_id"]], cheer[r["id"]], photos.get(r["id"]),
+            events.get(r["event_id"]),
+        )
+        for r in rows
+    ]
+
+
+def event_record_maps(event_ids: list[int], user_id: int) -> dict[int, dict]:
+    """Batch each event's photo count + its newest few records (FEED.md F3/F6).
+
+    Returns {event_id: {record_count, records}} where ``records`` holds at most
+    ``FEED_RECORDS_PER_EVENT`` record_cards, newest-first. Hidden records are
+    excluded from both -- three reports and a photo leaves every surface (F-I9).
+    """
+    from app.matching import FEED_RECORDS_PER_EVENT
+
+    if not event_ids:
+        return {}
+    counts = {
+        r["event_id"]: r["c"]
+        for r in db.query(
+            "SELECT event_id, COUNT(*) AS c FROM service_records "
+            "WHERE event_id = ANY(%s) AND hidden = false GROUP BY event_id",
+            (event_ids,),
+        )
+    }
+    top = db.query(
+        "SELECT * FROM (SELECT s.*, row_number() OVER ("
+        "  PARTITION BY s.event_id ORDER BY s.created_at DESC, s.id DESC) AS rn "
+        "FROM service_records s WHERE s.event_id = ANY(%s) AND s.hidden = false) t "
+        "WHERE t.rn <= %s ORDER BY t.event_id, t.rn",
+        (event_ids, FEED_RECORDS_PER_EVENT),
+    )
+    cards = record_cards(top, user_id)
+    by_event: dict[int, list] = {}
+    for row, card in zip(top, cards):
+        by_event.setdefault(row["event_id"], []).append(card)
+    return {
+        eid: {"record_count": int(counts.get(eid, 0)), "records": by_event.get(eid, [])}
+        for eid in event_ids
     }

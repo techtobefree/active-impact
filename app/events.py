@@ -18,10 +18,12 @@ import io
 import psycopg
 import qrcode
 import qrcode.image.svg
-from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, Request, Response
+from pydantic import BaseModel, field_validator
 
-from app import audit, db, serializers
+from datetime import datetime
+
+from app import audit, db, matching, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.projects import current_waiver, is_leader, new_code
@@ -38,6 +40,36 @@ _IS_OVER = (
 
 class LeaderFlagIn(BaseModel):
     is_leader: bool
+
+
+class EventUpdate(BaseModel):
+    """Correct an occurrence: when, where, how long, and where exactly.
+
+    ``lat``/``lon`` pin the event for record matching (FEED.md F5); send both
+    (nulls clear them). Everything is optional -- only what is sent is written.
+    """
+    starts_at: datetime | None = None
+    location_text: str | None = None
+    expected_minutes: int | None = None
+    lat: float | None = None
+    lon: float | None = None
+
+    @field_validator("location_text")
+    @classmethod
+    def _v_location(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not (1 <= len(v) <= 200):
+            raise ValueError("location must be 1-200 characters")
+        return v
+
+    @field_validator("expected_minutes")
+    @classmethod
+    def _v_minutes(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("expected_minutes must be greater than 0")
+        return v
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -112,12 +144,67 @@ def _require_leader(event_id: int, user_id: int) -> dict:
     return ev
 
 
+# ---- "which event am I at?" -------------------------------------------------
+# Declared BEFORE /events/{event_id} so the literal path wins the match.
+
+@router.get("/events/candidates")
+def event_candidates(
+    lat: float | None = Query(default=None),
+    lon: float | None = Query(default=None),
+    user: dict = Depends(current_user),
+):
+    """Every event currently collecting photos, ranked for this caller.
+
+    ``match`` is what a record posted right now would attach to (FEED.md §4) --
+    the log screen shows it as "Posting to ..."; ``candidates`` is the list behind
+    its Change link. Coordinates are optional: the check-in / RSVP signals work
+    without any location permission at all.
+    """
+    rows = matching.candidate_rows(user["id"], lat, lon)
+    cands = [
+        {
+            "event_id": r["event_id"],
+            "project_id": r["project_id"],
+            "project_title": r["project_title"],
+            "starts_at": r["starts_at"],
+            "location_text": r["location_text"],
+            "distance_km": round(r["distance_km"], 2) if r["distance_km"] is not None else None,
+            "reason": matching.reason_for(r),
+        }
+        for r in rows
+    ]
+    chosen, _ = matching.resolve_event(user["id"], lat, lon)
+    match = next((c for c in cands if c["event_id"] == chosen), None)
+    return {"match": match, "candidates": cands}
+
+
 # ---- event detail -----------------------------------------------------------
 
 @router.get("/events/{event_id}")
 def get_event(event_id: int, user: dict = Depends(current_user)):
     if not _get_event(event_id):
         raise api_error(404, "not_found")
+    return _event_response(event_id, user["id"])
+
+
+@router.patch("/events/{event_id}")
+def update_event(
+    event_id: int, body: EventUpdate, user: dict = Depends(current_user)
+):
+    """Leader: correct this occurrence's schedule, place, or coordinates.
+
+    Project-wide fields (title/description/waiver) stay on the project; this is
+    the per-occurrence counterpart, and the only way to pin lat/lon for matching.
+    """
+    _require_leader(event_id, user["id"])
+    data = body.model_dump(exclude_unset=True)
+    if data:
+        sets = ", ".join(f"{k} = %s" for k in data)
+        with db.tx() as c:
+            c.execute(
+                f"UPDATE events SET {sets}, updated_at = now() WHERE id = %s",
+                list(data.values()) + [event_id],
+            )
     return _event_response(event_id, user["id"])
 
 

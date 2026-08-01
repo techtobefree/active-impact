@@ -120,10 +120,14 @@ IS NULL`, in the same transaction.
 
 - **record_card** gains `event: {id, project_id, project_title, starts_at} | null`.
   Never `lat`/`lon`, never `match_reason`.
-- **project_card** gains `records: record_card[]` — the **≤2 most recent
-  non-hidden** records of the card's embedded event, newest-first, batched by
-  event id across the whole page (no N+1). Empty array when there are none.
-- **event_card** gains `record_count` (non-hidden), batched the same way.
+- **event_card** gains `records: record_card[]` — the **≤2 most recent
+  non-hidden** records of that event, newest-first — and `record_count`
+  (non-hidden), both batched by event id across a whole page (no N+1).
+  **Records hang off the event, not the project**: a photo belongs to an
+  occurrence, and one owner beats mirroring the same list onto two shapes. A
+  project card therefore shows its photos as `card.event.records`, and every
+  other surface that embeds an event (project detail's event rows, the check-in
+  screen) gets them for free.
 - **event_detail** gains `lat`, `lon` (nullable) — the only place coordinates are
   served, so a leader can see and correct them.
 - **event_candidate** (new, for the picker): `{event_id, project_id,
@@ -134,13 +138,13 @@ IS NULL`, in the same transaction.
 | Endpoint | Change |
 |---|---|
 | `POST /api/service_records` | Body gains `event_id?`, `lat?`, `lon?`. Runs §4, stores `event_id` + `match_reason`, may bootstrap the event's coordinates. Response carries `event`. |
-| `GET /api/service_records` | Gains `?event_id=` (one event's feed) and `scope=unattached` (mine, no event). `scope=all` now means **attached records only** — the global stream is the projects feed (F2/F7). |
-| `PATCH /api/service_records/{id}` | **New.** Author only. `{event_id \| null}` — attach, re-attach, or detach. `match_reason` becomes `explicit`. |
+| `GET /api/service_records` | Gains `?event_id=` (one event's feed) and `scope=unattached` (mine, no event). `scope=all` keeps meaning *all* — an API that lies about its own word is worse than an unused scope. F7 is enforced where it belongs: **no screen renders a global log feed**. |
+| `PATCH /api/service_records/{id}` | **New.** Author only. `{event_id \| null}` — attach, re-attach, or detach. `match_reason` becomes `explicit`. Targets are bounded exactly like an explicit create (`matching.may_attach`): an event still collecting, or one the author has been to — so a record cannot be parked on an arbitrary stranger's project. 409 `event_not_attachable` otherwise. |
 | `GET /api/events/candidates` | **New.** `?lat=&lon=` → `event_candidate[]` ranked by §4, plus `match` = the auto-choice (what a post right now would attach to). Powers both the "Posting to…" preview and the picker. |
 | `PATCH /api/events/{id}` | **New.** Leader only. `{starts_at?, location_text?, expected_minutes?, lat?, lon?}`. Closes a real gap: an event's time and place were previously uneditable. |
 | `POST /api/projects/{id}/events` | Body gains `lat?`, `lon?`. |
 | `POST /api/projects` | Body gains `lat?`, `lon?` for the first event. |
-| `GET /api/projects` | Each `project_card` now carries `records[]` (§5). |
+| `GET /api/projects` | Each card's embedded `event` now carries `records[]` + `record_count` (§5). |
 
 ## 7. Screens (delta to FRONTEND.md)
 
@@ -172,7 +176,7 @@ we never recorded would be inventing data. Authors can attach them by hand
 | **F-I3** | Priority order holds: an open participation beats an RSVP, which beats a geo match; `explicit` beats everything. |
 | **F-I4** | A geo match is never returned beyond `MAX_MATCH_KM`, and never for an event with NULL coordinates. |
 | **F-I5** | No response body anywhere contains a record's `lat`, `lon`, or `match_reason` (F6). |
-| **F-I6** | A project card carries at most `FEED_RECORDS_PER_EVENT` records, newest-first, all belonging to the card's embedded event, none hidden. |
+| **F-I6** | An event card carries at most `FEED_RECORDS_PER_EVENT` records, newest-first, all belonging to that event, none hidden. |
 | **F-I7** | Bootstrap only ever fills coordinates that were NULL — it never overwrites a leader's. |
 | **F-I8** | `PATCH /service_records/{id}` is author-only and cannot point a record at a nonexistent event. |
 | **F-I9** | Hidden records (3 reports) vanish from project cards and event feeds, exactly as they already vanish from the record feed. |

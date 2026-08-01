@@ -503,17 +503,17 @@ volunteers (flat rate is intent).
   Σ `earn` entries, `projects_joined` = count distinct **projects** across the
   events of my closed participations). Balance is **private** (only in `/api/me`).
 - **project_card**: `id, title, cover_image_id` (primary image, else first by id,
-  or null)`, follower_count, event, records` — where `event` is ONE embedded
-  **event_card** (the soonest not-over event for `upcoming`, the most-recent for
-  `past`) or `null` (a project with no relevant event), and `records` is the
-  **≤2 most recent non-hidden record_cards of that event**, newest-first (FEED.md
-  F3; `[]` when there are none, batched by event id — no N+1).
+  or null)`, follower_count, event` — where `event` is ONE embedded **event_card**
+  (the soonest not-over event for `upcoming`, the most-recent for `past`) or
+  `null` (a project with no relevant event). The card's photos come from
+  `event.records` — records belong to an occurrence, so the event owns them.
 - **event_card**: `id, starts_at, location_text, expected_minutes, status,
   is_over` (per-event), `cover_image_id` (the event's own cover — primary image
-  else first by id, or null), `checked_in_count`, `record_count` (non-hidden) +
-  per-requesting-user state `my_rsvp {is_leader}|null`,
-  `my_open_participation {id, checked_in_at}|null`, `my_hours_here` (batched by
-  event id — no N+1).
+  else first by id, or null), `checked_in_count`, `record_count` (non-hidden),
+  `records` (the **≤2 most recent non-hidden record_cards** of this event,
+  newest-first, `[]` when none — FEED.md F3) + per-requesting-user state
+  `my_rsvp {is_leader}|null`, `my_open_participation {id, checked_in_at}|null`,
+  `my_hours_here` (all batched by event id — no N+1).
 - **event_detail**: event_card + `image_ids[]` (the event's images, entity
   `'event'`, ordered by id) + `lat`/`lon` (nullable — the ONLY shape serving
   coordinates, so a leader can see and correct them) + `checkin_code` (present

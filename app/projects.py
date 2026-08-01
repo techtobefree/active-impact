@@ -59,6 +59,8 @@ class ProjectCreate(BaseModel):
     location_text: str
     starts_at: datetime
     expected_minutes: int = Field(gt=0)
+    lat: float | None = None  # optional: where the event actually is (FEED.md F5)
+    lon: float | None = None
 
     @field_validator("title")
     @classmethod
@@ -117,6 +119,8 @@ class EventCreate(BaseModel):
     location_text: str
     starts_at: datetime
     expected_minutes: int = Field(gt=0)
+    lat: float | None = None  # optional: where it actually is (FEED.md F5)
+    lon: float | None = None
 
     @field_validator("location_text")
     @classmethod
@@ -177,12 +181,14 @@ def _is_following(project_id: int, user_id: int) -> bool:
     ) is not None
 
 
-def insert_event(c, project_id: int, location_text: str, starts_at, expected_minutes: int) -> dict:
+def insert_event(c, project_id: int, location_text: str, starts_at, expected_minutes: int,
+                 lat: float | None = None, lon: float | None = None) -> dict:
     """Insert one event (occurrence) with a fresh check-in code, status 'open'."""
     return c.execute(
         "INSERT INTO events(project_id, location_text, starts_at, expected_minutes, "
-        "checkin_code, status) VALUES (%s, %s, %s, %s, %s, 'open') RETURNING *",
-        (project_id, location_text, starts_at, expected_minutes, new_code()),
+        "lat, lon, checkin_code, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, 'open') RETURNING *",
+        (project_id, location_text, starts_at, expected_minutes, lat, lon, new_code()),
     ).fetchone()
 
 
@@ -375,7 +381,8 @@ def create_project(body: ProjectCreate, user: dict = Depends(current_user)):
             "INSERT INTO waivers(project_id, version, text) VALUES (%s, 1, %s)",
             (pid, waiver_text),
         )
-        insert_event(c, pid, body.location_text, body.starts_at, body.expected_minutes)
+        insert_event(c, pid, body.location_text, body.starts_at, body.expected_minutes,
+                     body.lat, body.lon)
     return _detail(_get_project(pid), user["id"])
 
 
@@ -447,7 +454,8 @@ def add_event(
         raise api_error(403, "not_a_leader")
     with db.tx() as c:
         ev = insert_event(
-            c, project_id, body.location_text, body.starts_at, body.expected_minutes
+            c, project_id, body.location_text, body.starts_at, body.expected_minutes,
+            body.lat, body.lon,
         )
     state = serializers.event_state(ev["id"], user["id"])
     return serializers.event_detail(ev, state, am_leader=True)

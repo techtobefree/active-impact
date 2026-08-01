@@ -1,10 +1,15 @@
-"""Service records: the anonymous-first social log (SERVICE_LOG.md §5, §6, §8, §9).
+"""Service records: one logged act of service (SERVICE_LOG.md + FEED.md).
 
 One record = one photo + one caption, authored by whoever you currently are
-(guest or real). This is a STANDALONE layer -- it touches no tokens,
-participations, projects, or the ledger. The photo reuses the polymorphic images
-table (entity='service_record'); cheers are a single 🙌 per user; reports drive
-light moderation (auto-hide at N distinct reporters).
+(guest or real). It touches no tokens, participations, or the ledger -- but it
+BELONGS TO AN EVENT (FEED.md F1): app/matching.py resolves which one from the
+author's check-in, RSVP, or GPS + time, and the event's project card then carries
+the photo. Nothing matched means ``event_id IS NULL`` -- the record is saved
+anyway, as its author's own log entry, until they attach it.
+
+The photo reuses the polymorphic images table (entity='service_record'); cheers
+are a single 🙌 per user; reports drive light moderation (auto-hide at N distinct
+reporters).
 
 See docs/design/API.md § Service records.
 """
@@ -13,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, field_validator
 
-from app import db, serializers
+from app import db, matching, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.images import decode_image_payload
@@ -30,10 +35,19 @@ HIDE_THRESHOLD = 3
 # ---- request bodies ---------------------------------------------------------
 
 class RecordCreate(BaseModel):
-    """One-shot create: the caption plus its (required) photo payload."""
+    """One-shot create: the caption, its (required) photo, and where I am.
+
+    ``event_id`` states the event outright (logging from an event page or after
+    picking one); ``lat``/``lon`` are the device's position, used only to work out
+    which event this was (FEED.md §4). All three are optional -- a bare caption +
+    photo still posts, it just may land unattached.
+    """
     caption: str
     content_type: str
     data_base64: str
+    event_id: int | None = None
+    lat: float | None = None
+    lon: float | None = None
 
     @field_validator("caption")
     @classmethod
@@ -42,6 +56,26 @@ class RecordCreate(BaseModel):
         if not (1 <= len(v) <= CAPTION_MAX):
             raise ValueError(f"caption must be 1-{CAPTION_MAX} characters")
         return v
+
+    @field_validator("lat")
+    @classmethod
+    def _v_lat(cls, v: float | None) -> float | None:
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("lat must be between -90 and 90")
+        return v
+
+    @field_validator("lon")
+    @classmethod
+    def _v_lon(cls, v: float | None) -> float | None:
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("lon must be between -180 and 180")
+        return v
+
+
+class RecordAttach(BaseModel):
+    """Attach, re-attach, or (with null) detach a record -- the author's remedy
+    when the auto-match guessed wrong or found nothing."""
+    event_id: int | None = None
 
 
 class ReportIn(BaseModel):
@@ -68,13 +102,6 @@ def _visible_record(record_id: int) -> dict:
     return row
 
 
-def _author(user_id: int) -> dict:
-    """The author row carrying the email flag (never emitted) for is_guest."""
-    return db.query_one(
-        "SELECT id, display_name, email FROM users WHERE id = %s", (user_id,)
-    )
-
-
 def _cheer_count(record_id: int) -> int:
     return int(
         db.query_one(
@@ -88,8 +115,9 @@ def _cheer_count(record_id: int) -> int:
 @router.post("/service_records", status_code=201)
 def create_record(body: RecordCreate, user: dict = Depends(current_user)):
     """Insert a record + its image in ONE tx (record first for the id, then the
-    photo pinned to it -- the check-in "insert then pin" pattern). Returns the
-    record_card. 429 rate_limited past the per-hour cap."""
+    photo pinned to it -- the check-in "insert then pin" pattern), having first
+    worked out WHICH EVENT this was (FEED.md §4). Returns the record_card.
+    429 rate_limited past the per-hour cap."""
     uid = user["id"]
     recent = db.query_one(
         "SELECT COUNT(*) AS c FROM service_records "
@@ -102,10 +130,16 @@ def create_record(body: RecordCreate, user: dict = Depends(current_user)):
     # Validate the photo (content-type + base64 + 10 MB) before opening the tx.
     data = decode_image_payload(body.content_type, body.data_base64)
 
+    try:
+        event_id, reason = matching.resolve_event(uid, body.lat, body.lon, body.event_id)
+    except LookupError:
+        raise api_error(404, "event_not_found")
+
     with db.tx() as c:
         rec = c.execute(
-            "INSERT INTO service_records(user_id, caption) VALUES (%s, %s) RETURNING *",
-            (uid, body.caption),
+            "INSERT INTO service_records(user_id, caption, event_id, lat, lon, match_reason) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (uid, body.caption, event_id, body.lat, body.lon, reason),
         ).fetchone()
         img = c.execute(
             "INSERT INTO images(entity, entity_id, content_type, bytes, size, "
@@ -113,9 +147,45 @@ def create_record(body: RecordCreate, user: dict = Depends(current_user)):
             "VALUES ('service_record', %s, %s, %s, %s, %s, true) RETURNING id",
             (rec["id"], body.content_type, data, len(data), uid),
         ).fetchone()
+        # A record that found its event by other means also geolocates it, once.
+        if event_id is not None and reason != "nearby":
+            matching.bootstrap_coords(c, event_id, body.lat, body.lon)
 
     cheer = {"cheer_count": 0, "i_cheered": False}
-    return serializers.record_card(rec, user, cheer, img["id"])
+    event = serializers.record_event_maps([event_id]).get(event_id)
+    return serializers.record_card(rec, user, cheer, img["id"], event)
+
+
+@router.patch("/service_records/{record_id}")
+def attach_record(
+    record_id: int, body: RecordAttach, user: dict = Depends(current_user)
+):
+    """Author-only: put this record on an event (or take it off, with null).
+
+    The remedy for a wrong guess and the way an unattached record finds its home.
+    Targets are bounded exactly like an explicit create: an event still collecting
+    photos, or one the author has actually been to (matching.may_attach)."""
+    rec = db.query_one("SELECT * FROM service_records WHERE id = %s", (record_id,))
+    if not rec:
+        raise api_error(404, "not_found")
+    if rec["user_id"] != user["id"]:
+        raise api_error(403, "not_yours")
+
+    event_id = body.event_id
+    if event_id is not None:
+        try:
+            if not matching.may_attach(user["id"], event_id):
+                raise api_error(409, "event_not_attachable")
+        except LookupError:
+            raise api_error(404, "event_not_found")
+
+    with db.tx() as c:
+        rec = c.execute(
+            "UPDATE service_records SET event_id = %s, match_reason = %s "
+            "WHERE id = %s RETURNING *",
+            (event_id, "explicit" if event_id is not None else None, record_id),
+        ).fetchone()
+    return serializers.record_cards([rec], user["id"])[0]
 
 
 # ---- feed / detail ----------------------------------------------------------
@@ -123,52 +193,43 @@ def create_record(body: RecordCreate, user: dict = Depends(current_user)):
 @router.get("/service_records")
 def list_records(
     scope: str = Query("all"),
+    event_id: int | None = Query(default=None),
     page: Page = Depends(pagination),
     user: dict = Depends(current_user),
 ):
-    """record_card[] newest-first, hidden excluded. scope=all (default, global
-    feed) or mine (the caller's own). Cheer state + photos are BATCHED by record
-    id -- no N+1, like GET /projects."""
-    uid = user["id"]
-    if scope == "mine":
-        rows = db.query(
-            "SELECT * FROM service_records WHERE hidden = false AND user_id = %s "
-            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
-            (uid, page.limit, page.offset),
-        )
-    else:  # all
-        rows = db.query(
-            "SELECT * FROM service_records WHERE hidden = false "
-            "ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
-            (page.limit, page.offset),
-        )
-    if not rows:
-        return []
+    """record_card[] newest-first, hidden excluded.
 
-    record_ids = [r["id"] for r in rows]
-    author_ids = list({r["user_id"] for r in rows})
-    authors = {
-        a["id"]: a
-        for a in db.query(
-            "SELECT id, display_name, email FROM users WHERE id = ANY(%s)",
-            (author_ids,),
-        )
-    }
-    cheer = serializers.record_cheer_maps(record_ids, uid)
-    photos = serializers.record_photo_maps(record_ids)
-    return [
-        serializers.record_card(r, authors[r["user_id"]], cheer[r["id"]], photos.get(r["id"]))
-        for r in rows
-    ]
+    scope=all (default) · mine (the caller's own, attached or not) · unattached
+    (the caller's own that matched no event -- their loose log entries).
+    ``event_id`` narrows any scope to ONE event's feed, which is what the event
+    page renders. Everything is BATCHED by record id -- no N+1, like GET /projects.
+    """
+    uid = user["id"]
+    where = ["hidden = false"]
+    params: list = []
+    if scope == "mine":
+        where.append("user_id = %s")
+        params.append(uid)
+    elif scope == "unattached":
+        where.append("user_id = %s AND event_id IS NULL")
+        params.append(uid)
+    if event_id is not None:
+        where.append("event_id = %s")
+        params.append(event_id)
+    params += [page.limit, page.offset]
+    rows = db.query(
+        "SELECT * FROM service_records WHERE " + " AND ".join(where)
+        + " ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+        params,
+    )
+    return serializers.record_cards(rows, uid)
 
 
 @router.get("/service_records/{record_id}")
 def get_record(record_id: int, user: dict = Depends(current_user)):
     """A single record (share target / detail). 404 if hidden or absent."""
     rec = _visible_record(record_id)
-    cheer = serializers.record_cheer_maps([record_id], user["id"])[record_id]
-    photo = serializers.cover_image_id("service_record", record_id)
-    return serializers.record_card(rec, _author(rec["user_id"]), cheer, photo)
+    return serializers.record_cards([rec], user["id"])[0]
 
 
 # ---- delete (author only) ---------------------------------------------------
