@@ -134,6 +134,16 @@ test.describe('Service log on events (the one feed)', () => {
     const title = 'Shared Cleanup ' + uname('shared');
     const { eventId } = await liveProject(page, title);
 
+    // Post BEFORE the target lookup can answer. The screen says "Log to this
+    // event", so it must attach to it regardless — the route is the truth, not
+    // the lookup that merely prints the project's name. (Real latency caught
+    // this; the delay makes it deterministic.)
+    // times: 1 — only the log screen's lookup is slowed; the event page that
+    // follows loads normally (and an outliving handler would fail to continue).
+    await page.route(`**/api/events/${eventId}`, async (route) => {
+      await new Promise((r) => setTimeout(r, 3000));
+      await route.continue().catch(() => {});
+    }, { times: 1 });
     await page.goto(`/#/log/${eventId}`);
     const caption = 'Planted trees ' + uname('two');
     await postRecord(page, caption);

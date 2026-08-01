@@ -62,12 +62,26 @@ itself blocking. Nothing does today; `refresh()` is always called fire-and-forge
 A future `await refresh()` would deadlock the router, so this is the one rule to
 remember.
 
+## The rule serialization creates (it bit immediately)
+
+A view that keeps awaiting delays the *next* view. The log screen awaited
+`getPosition()` before returning, so a phone whose owner ignores the location
+prompt would have frozen navigation for the full 8-second geolocation timeout —
+caught by the peer-check-in e2e test, which navigates away from `#/log` and then
+waited on it.
+
+**So: a view awaits only what it needs in order to mount.** Anything slower —
+geolocation, a target lookup, a paginated feed — runs detached and repaints when
+it lands, guarded by `node.isConnected` so a departed screen paints nothing. That
+is now the pattern in `logView` and `recordFeed`.
+
 ## Residual limitation
 
-A view whose fetch hangs delays the *next* view (not the chrome). Every fetch here
-is same-origin and behind a healthcheck, and the previous behaviour — navigate
-instantly, then get repainted by the page you left — was worse. If it ever bites,
-the next step is an abort signal per render passed into `api()`.
+A view whose *mounting* fetch hangs still delays the next view (never the chrome).
+Every such fetch is same-origin and behind a healthcheck, and the previous
+behaviour — navigate instantly, then get repainted by the page you left — was
+worse. If it ever bites, the next step is an abort signal per render passed into
+`api()`.
 
 ## Covered by
 

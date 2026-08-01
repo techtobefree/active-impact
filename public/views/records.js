@@ -384,7 +384,12 @@ export async function logView(eventId) {
       const body = {
         caption: cap.value.trim(), content_type: 'image/jpeg', data_base64: dataB64,
       };
-      if (target) body.event_id = target.event_id;
+      // When the ROUTE named the event, that is the truth — never the resolved
+      // target. Its lookup is only there to print the project's name, and on a
+      // slow connection a quick photo + Post beats it, which would otherwise post
+      // "unattached" from a screen that says "Log to this event".
+      if (locked) body.event_id = Number(eventId);
+      else if (target) body.event_id = target.event_id;
       if (pos) { body.lat = pos.lat; body.lon = pos.lon; }
       const rec = await api('/service_records', { body });
       if (rec.event) {
@@ -406,27 +411,33 @@ export async function logView(eventId) {
   mount(root);
   paintTarget('locating');
 
-  // Resolve the target in the background — the photo and caption never wait on it.
-  if (locked) {
-    try {
-      const ev = await api('/events/' + eventId);
-      target = {
-        event_id: Number(eventId), project_id: (ev.project || {}).id,
-        project_title: (ev.project || {}).title, starts_at: ev.starts_at,
-        location_text: ev.location_text, distance_km: null, reason: null,
-      };
-    } catch { /* fall back to an unlinked post */ }
-    paintTarget();
-  } else {
-    pos = await getPosition();
-    try {
-      const q = pos ? `?lat=${pos.lat}&lon=${pos.lon}` : '';
-      const data = await api('/events/candidates' + q);
-      candidates = data.candidates || [];
-      target = data.match;
-    } catch { /* offline: post unlinked rather than block the photo */ }
-    paintTarget();
-  }
+  // Resolve the target in the BACKGROUND, deliberately NOT awaited: the photo
+  // and caption never wait on it, and neither does the router — a queued render
+  // must not sit behind a location prompt the user is ignoring (which can take
+  // the full geolocation timeout to give up).
+  (async () => {
+    if (locked) {
+      try {
+        const ev = await api('/events/' + eventId);
+        target = {
+          event_id: Number(eventId), project_id: (ev.project || {}).id,
+          project_title: (ev.project || {}).title, starts_at: ev.starts_at,
+          location_text: ev.location_text, distance_km: null, reason: null,
+        };
+      } catch { /* the route still carries the event id — only the label is lost */ }
+    } else {
+      pos = await getPosition();
+      try {
+        const q = pos ? `?lat=${pos.lat}&lon=${pos.lon}` : '';
+        const data = await api('/events/candidates' + q);
+        candidates = data.candidates || [];
+        target = data.match;
+      } catch { /* offline: post unlinked rather than block the photo */ }
+    }
+    // The screen may be long gone (posted, or navigated away) — repaint only if
+    // this log screen is still the one mounted.
+    if (targetCard.isConnected) paintTarget();
+  })();
 }
 
 // ---- record detail ----------------------------------------------------------
