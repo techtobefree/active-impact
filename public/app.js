@@ -31,6 +31,9 @@ const routes = [
   // Deliberately loose: a mangled QR/URL code must reach the check-in view's
   // friendly "invalid code" card, not silently fall through to the home screen.
   [/^#\/c\/(.+)$/, checkin.checkinView],
+  // PEER check-in: a person's code + the event it was shown for. Strict on the
+  // event id (it is ours to generate), loose on the token (same reasoning as above).
+  [/^#\/s\/([^/]+)\/(\d+)$/, checkin.scanView],
   [/^#\/catalog$/, catalog.listView],
   [/^#\/catalog\/new$/, catalog.newView],
   [/^#\/catalog\/(\d+)$/, catalog.detailView],
@@ -90,7 +93,7 @@ function updateChrome(hash) {
     : hash.startsWith('#/catalog') ? 'catalog'
     : hash.startsWith('#/wallet') ? 'wallet'
     : (hash.startsWith('#/me') || hash.startsWith('#/u/')) ? 'me'
-    : (hash === '#/login' || hash === '#/register' || hash.startsWith('#/c/')) ? ''
+    : (hash === '#/login' || hash === '#/register' || hash.startsWith('#/c/') || hash.startsWith('#/s/')) ? ''
     : 'home'; // #/, #/log, #/r/…
   nav.querySelectorAll('a').forEach((a) => a.classList.toggle('active', a.dataset.tab === active));
   if (fab) fab.classList.toggle('hidden', !(hash === '#/' || hash.startsWith('#/r/')));

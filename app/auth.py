@@ -76,6 +76,16 @@ def _new_handle() -> str:
     return f"{secrets.choice(_HANDLE_ADJECTIVES)} {secrets.choice(_HANDLE_ANIMALS)}"
 
 
+def new_qr_token() -> str:
+    """The permanent opaque handle a personal QR carries (CHECKIN_PROOF.md §3/P4).
+
+    Same generator and shape as ``events.checkin_code``. Minted with the row --
+    guests included, since a guest can be scanned like anyone else -- and never
+    reissued: a printed code has to keep working.
+    """
+    return secrets.token_urlsafe(8)
+
+
 class RegisterIn(BaseModel):
     email: str
     password: str
@@ -157,9 +167,10 @@ def register(body: RegisterIn):
     try:
         with db.tx() as c:
             user = c.execute(
-                "INSERT INTO users(email, password_hash, display_name) "
-                "VALUES (%s, %s, %s) RETURNING *",
-                (body.email, _hash_password(body.password), body.display_name),
+                "INSERT INTO users(email, password_hash, display_name, qr_token) "
+                "VALUES (%s, %s, %s, %s) RETURNING *",
+                (body.email, _hash_password(body.password), body.display_name,
+                 new_qr_token()),
             ).fetchone()
             token = _new_session(c, user["id"])
     except psycopg.errors.UniqueViolation:
@@ -202,9 +213,9 @@ def guest(authorization: str | None = Header(default=None)):
             return {"token": token, "user": me_shape(row)}
     with db.tx() as c:
         user = c.execute(
-            "INSERT INTO users(email, password_hash, display_name) "
-            "VALUES (NULL, NULL, %s) RETURNING *",
-            (_new_handle(),),
+            "INSERT INTO users(email, password_hash, display_name, qr_token) "
+            "VALUES (NULL, NULL, %s, %s) RETURNING *",
+            (_new_handle(), new_qr_token()),
         ).fetchone()
         new_token = _new_session(c, user["id"])
     return {"token": new_token, "user": me_shape(user)}

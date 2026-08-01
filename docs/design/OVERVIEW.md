@@ -11,6 +11,13 @@
 > 5. [DEPLOYMENT.md](./DEPLOYMENT.md) — containers, Caddy, and the given-a-URL runbook
 > 6. [BUILD_PLAN.md](./BUILD_PLAN.md) — TDD milestones and the definition of done
 >
+> Feature designs layered on top of the above:
+> [SERVICE_LOG.md](./SERVICE_LOG.md) — the anonymous-first log-and-share layer ·
+> [CHECKIN_PROOF.md](./CHECKIN_PROOF.md) — asserted vs **attested** presence
+> (the personal QR, peer check-in, and what it does and does not prove)
+>
+> Known gaps live in [`../issues/`](../issues/).
+>
 > Source of intent: [`../intent.md`](../intent.md) (user's verbatim words — authoritative)
 > and [`../interpreted-mvp.md`](../interpreted-mvp.md) (structured reading).
 > Reference implementation mined for patterns: the deployed **home-keep** app
@@ -74,7 +81,9 @@ re-litigate them during implementation.**
 | D2 | **Schema = SQLAlchemy models + Alembic migrations.** `app/models.py` is the source of truth; `alembic upgrade head` (run by `python -m app.db --init`) applies pending migrations on **every container boot**. Evolve with `alembic revision --autogenerate -m "..."` → review → upgrade. | A real migration framework so the schema updates easily over time. Autogenerate reliably diffs columns/tables; hand-check partial/expression indexes + CHECK constraints (normal Alembic practice). |
 | D3 | **Auth = email+password with bcrypt** (founder decision, supersedes the original username scheme); login mints an opaque token (`secrets.token_hex(32)`) stored in a `sessions` row with **30-day expiry**; client sends `Authorization: Bearer <token>`; token kept in `localStorage`. No cookies, no JWT, no CSRF surface. **Emails are private** — never in any public shape; the public identity is `display_name` (required, non-unique — known MVP tradeoff) + user id. | Email is what people actually have; session-token mechanics unchanged (proven, instantly revocable). Privacy: showing emails on profiles/rosters/ledgers would leak them, so display name carries public identity. |
 | D4 (Q6) | **Frontend = no-build vanilla JS** ES modules + a ~30-line **hash router**; emoji icon system; CSS custom-property tokens incl. a `prefers-color-scheme: dark` override. No framework, no bundler, zero frontend deps. | Matches the deployed reference and the user's essentialism. The router is the one addition home-keep's pattern strictly needs (QR deep links). |
-| D5 (Q1) | **QR = a plain URL.** Server renders SVG QR of `https://SITE/#/c/{checkin_code}`; the **leader displays it**, the **volunteer scans with the native camera app** — no in-app scanner, no getUserMedia. | Zero camera-permission code. A QR that is just a link works on every phone. |
+| D5 (Q1) | **QR = a plain URL.** Server renders SVG QR of `https://SITE/#/c/{checkin_code}`; the **leader displays it**, the **volunteer scans with the native camera app**. | A QR that is just a link works on every phone, with or without an in-app scanner. |
+| D5b | **Presence has two layers: asserted and attested** (CHECKIN_PROOF.md). The check-in button is an *assertion* (`participations.attested = false`). The proof layer is a **personal QR** — `#/s/{qr_token}/{event_id}`, a person + an event — and one scan records **both** parties as present, attributed to the scanner, in an append-only `attestations` table. Codes are **static and printable**: no nonce, no rotation, no expiry. | The founder's definition of a real check-in: *somebody else who was there scanned my code.* Static is a hard requirement (print it and pin it to the wall), which rules out freshness schemes — the residual replay risk is accepted and documented rather than half-mitigated. |
+| D5c | **An in-app scanner now exists**, but only as `BarcodeDetector` + `getUserMedia` behind a capability check — **still zero dependencies** (D4). The Check in button tries the camera first and falls back to the asserted check-in when it is unavailable; the native camera remains a first-class path because the peer QR is a URL (D5). | Supersedes the original "no in-app scanner, no getUserMedia". Scanning has to happen *inside* the flow for the volunteer to be the one holding the camera. Platform-native API only, so a browser without it degrades instead of breaking. |
 | D6 (Q2) | **Check-out = explicit action**: volunteer self-checkout, or a leader checks out any participant from the roster, or the leader **closes the project** (checks out everyone still in). No cron, no auto-timeout. **Late checkouts cannot inflate the supply:** credited time is capped at 2× the project's expected duration (see D7) — a leader closing days late mints hours-scale, not days-scale, tokens. | Three cheap paths cover reality; forgetting is handled by the leader closing the project — and the cap makes "handled late" economically safe. Known simplification, documented. |
 | D7 | **Tokens are integer points.** Mint at checkout with **half-up integer math — never Python's `round()` (banker's rounding)**: `minutes = (seconds+30)//60`, `credited = min(minutes, 2×expected_minutes)`, `tokens = (credited+30)//60`; same flat rate for everyone (volunteers and leaders). Ledger is **append-only** (`token_entries`), balance is a **guarded cache column** (`users.balance`, `CHECK >= 0`) updated in the same transaction. Kinds: `earn` / `tip` / `spend`. | Intent: 1 token per hour, flat, no extra complexity — and time is recorded *because it prices the token*, so the cap protects exactly what the intent protects. The tx-plus-ledger shape copies home-keep's `changes` pattern — the one place bugs are unacceptable. |
 | D8 (Q3) | **Boundary:** anything with a **time and a place** is a *project*; standing **goods/services** are *catalog* items. "Register a need" = catalog item `kind='need'` (unpriced); helpers **tip the poster directly** from the need page. No separate "needs tokens" user flag; no in-app messaging (contact details go in the description if the poster wants). | One mechanism for needs instead of two. Messaging is real complexity deferred entirely. |
@@ -122,6 +131,7 @@ active-impact/
 │   ├── users.py            # /me, public profiles + stats
 │   ├── projects.py         # projects, leaders, waivers, QR svg, roster
 │   ├── checkin.py          # code resolve, agree(=check-in), checkout, close
+│   ├── scan.py             # peer check-in: personal QR resolve + confirm (attestations)
 │   ├── tokens.py           # ledger read, tip, mint/transfer primitives (the ONLY writers)
 │   ├── catalog.py          # items, claims, accept/decline/cancel
 │   └── images.py           # base64 upload, authed streaming, delete
@@ -131,7 +141,8 @@ active-impact/
 │   ├── icon.svg  icon-192.png  icon-512.png  apple-touch-icon.png
 │   ├── app.js              # boot + hash router + chrome
 │   ├── api.js  ui.js       # fetch helper / el(), esc(), widgets
-│   └── views/              # auth.js projects.js checkin.js catalog.js wallet.js profile.js
+│   ├── scan.js             # in-app QR scanner (BarcodeDetector + getUserMedia, capability-checked)
+│   └── views/              # auth.js projects.js checkin.js catalog.js wallet.js profile.js records.js
 ├── tests/                  # pytest + httpx TestClient (see BUILD_PLAN.md)
 ├── scripts/                # smoke.py (stdlib-only), seed.py (dev-only), backup.sh
 ├── docs/                   # intent + this design tree
@@ -146,7 +157,9 @@ active-impact/
 ## Deliberately deferred (do NOT build)
 
 Blockchain/monetary value for tokens · differentiated token rates · groups/orgs ·
-in-app messaging or comments · QR scanning in-app · moderation/admin tooling ·
+in-app messaging or comments · moderation/admin tooling ·
+rotating/signed/expiring QR codes, proximity checks, or attestation-based scoring
+(CHECKIN_PROOF.md § Non-goals) ·
 email (no addresses collected) · password reset (re-register or future feature) ·
 push notifications · offline data sync (shell-only offline) · maps/geocoding
 (location is text) · rate limiting & request-size hardening · CI pipeline ·

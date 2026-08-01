@@ -2,11 +2,12 @@
 // + its events), create (project + first event), and the per-EVENT lead hub
 // (QR, roster, who's-coming, close). A project has many events (occurrences);
 // per-user RSVP/check-in/check-out state now lives on the embedded event.
-import { api, apiBlobURL } from '../api.js';
+import { api, apiBlobURL, currentUser } from '../api.js';
 import {
   el, esc, mount, clear, addForm, avatarEl, statusPill, emptyState, spinner,
   toast, toastErr, errMessage, fmtDateTime, fmtDuration, imagesStrip,
 } from '../ui.js';
+import { scanQR, parseScan } from '../scan.js';
 import { refresh, refreshMe } from '../app.js';
 
 // ---- shared helpers ---------------------------------------------------------
@@ -31,6 +32,32 @@ function eventMeta(ev) {
     <div class="tag">⏱ ${esc(fmtDuration(ev.expected_minutes))}</div>
     <div class="tag">👥 ${esc(ev.checked_in_count)} checked in</div>
   </div>`);
+}
+
+// Asserted vs attested presence, wherever a check-in is shown. Neutral both
+// ways: self-reported is a legitimate outcome, not a failure (CHECKIN_PROOF.md §7.3).
+function attestPill(attested) {
+  return el(attested
+    ? '<span class="pill verified" title="Confirmed by someone else at the event">✅ Verified</span>'
+    : '<span class="pill selfreported" title="Nobody has confirmed this yet">● Self-reported</span>');
+}
+
+// The Check in button is SCANNER-FIRST (CHECKIN_PROOF.md §7.1): try the camera so
+// the check-in can be corroborated, and fall back to the plain asserted check-in
+// only when there is no scanner here. Cancelling is NOT the same as unavailable —
+// backing out is a decision, so it does nothing.
+async function scannerFirstCheckin(eventId, onDone) {
+  const res = await scanQR();
+  if (res.text) {
+    const hash = parseScan(res.text);
+    if (hash) { location.hash = hash; return; }
+    toast("That isn't an Active Impact code.");
+    return;
+  }
+  if (res.cancelled) return;
+  toast("Camera scanning isn't available here — checking you in as self-reported.");
+  await api(`/events/${eventId}/checkin`, { method: 'POST' });
+  onDone();
 }
 
 // A compact action node reflecting one EVENT's is_over / participation / rsvp
@@ -64,14 +91,15 @@ function actionEl(evt, onDone, { stopNav = false } = {}) {
     return btn;
   }
 
-  // RSVP'd (not yet on site): offer Check in (self-service, event-scoped).
+  // RSVP'd (not yet on site): offer Check in — camera first, assertion second.
   if (evt.my_rsvp) {
     const btn = el('<button class="act primary">Check in</button>');
     btn.onclick = async (e) => {
       guard(e);
       btn.disabled = true;
-      try { await api(`/events/${evt.id}/checkin`, { method: 'POST' }); onDone(); }
-      catch (err) { btn.disabled = false; toastErr(err); }
+      try { await scannerFirstCheckin(evt.id, onDone); }
+      catch (err) { toastErr(err); }
+      finally { btn.disabled = false; }
     };
     return btn;
   }
@@ -490,10 +518,15 @@ export async function eventDetailView(eventId) {
   top.append(left);
   const cell = el('<div class="action-cell"></div>');
   cell.append(el(statusPill(ev.status)));
+  if (ev.my_open_participation) cell.append(attestPill(ev.my_open_participation.attested));
   cell.append(actionEl(ev, () => { refreshMe(); refresh(); }));
   top.append(cell);
   head.append(top);
   root.append(head);
+
+  // My personal code for this event — the thing OTHER people scan to check in
+  // (CHECKIN_PROOF.md §5.2). Any attendee, not just leaders.
+  if (ev.my_rsvp || ev.my_open_participation) root.append(myCodeCard(eventId));
 
   // Event photos: leaders can add/remove/set the event cover right here.
   if (ev.am_leader) {
@@ -517,6 +550,33 @@ export async function eventDetailView(eventId) {
     root.append(el(`<a class="act ghost block" href="#/projects/${esc(project.id)}">View service project</a>`));
   }
   mount(root);
+}
+
+// My personal QR for one event, collapsed by default — it is only needed at the
+// moment somebody is standing in front of you. Static and printable by design
+// (CHECKIN_PROOF.md P5), so "print it and pin it up" is real advice, not a hint.
+function myCodeCard(eventId) {
+  const me = currentUser() || {};
+  const det = el('<details class="card"><summary>Show my code</summary></details>');
+  const body = el('<div class="stack center" style="margin-top:.75rem"></div>');
+  const box = el('<div class="qr"></div>');
+  const img = el('<img alt="My personal check-in QR code">');
+  box.append(img);
+  body.append(box);
+  if (me.display_name) body.append(el(`<div><strong>${esc(me.display_name)}</strong></div>`));
+  body.append(el('<p class="muted small center">Hold this up for someone arriving — scanning it checks you both in. You can print it and pin it up instead.</p>'));
+  det.append(body);
+  // Authed fetch → blob (a Bearer header can't ride on <img src>), and only once
+  // the card is actually opened.
+  let loaded = false;
+  det.addEventListener('toggle', () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    apiBlobURL(`/events/${eventId}/my-qr.svg`)
+      .then((u) => { img.src = u; })
+      .catch(() => { clear(box).append(el('<div class="muted">Code unavailable</div>')); });
+  });
+  return det;
 }
 
 // ---- event lead hub (#/events/:id/lead) -------------------------------------
@@ -640,6 +700,9 @@ function rsvpRow(eventId, r) {
   row.append(avatarEl(r.user));
   row.append(el(`<a class="grow" href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
   if (r.is_checked_in) row.append(el('<span class="pill green">checked in</span>'));
+  // Somebody scanned them — true even before they check in themselves, which is
+  // exactly when an organizer wants to know it.
+  else if (r.is_attested) row.append(el('<span class="pill verified" title="Someone here scanned their code">✅ seen</span>'));
 
   const toggle = el('<label class="switch" title="Event leader"></label>');
   toggle.append(el('<span class="small muted">Leader</span>'));
@@ -664,7 +727,10 @@ function rosterRow(r) {
   const row = el('<div class="card row" style="align-items:flex-start"></div>');
   row.append(avatarEl(r.user));
   const mid = el('<div class="grow"></div>');
-  mid.append(el(`<a href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
+  const name = el('<div class="row" style="gap:.4rem; align-items:center"></div>');
+  name.append(el(`<a href="#/u/${esc(r.user.id)}">${esc(r.user.display_name)}</a>`));
+  name.append(attestPill(r.attested));
+  mid.append(name);
   mid.append(el(`<div class="muted small">In ${esc(fmtDateTime(r.checked_in_at))}</div>`));
   if (r.checked_out_at) {
     mid.append(el(`<div class="muted small">Out ${esc(fmtDateTime(r.checked_out_at))} · ${esc(fmtDuration(r.minutes))} · ＋${esc(r.tokens_awarded)} 🪙</div>`));

@@ -46,7 +46,7 @@ and injects it into every protected handler.
 
 | Endpoint | → Response | Errors |
 |---|---|---|
-| `GET /api/me` | `{id, email, display_name, bio, balance, created_at, is_guest}` (email appears **only** here; `is_guest` = `email IS NULL`; a guest's email is JSON `null`) | — |
+| `GET /api/me` | `{id, email, display_name, bio, balance, created_at, is_guest, qr_token}` (email appears **only** here; `is_guest` = `email IS NULL`; a guest's email is JSON `null`; `qr_token` is my permanent opaque handle — private view only, so a code is only ever handed out by its owner — CHECKIN_PROOF.md §3) | — |
 | `PATCH /api/me` | body `{display_name?, bio?}` → updated me (bumps `updated_at`) | 422 |
 | `GET /api/users/{user_id}` | **user_public** (includes stats; NO balance, NO email) | 404 |
 
@@ -76,13 +76,14 @@ event's project (resolved event → project_id).
 |---|---|---|
 | `GET /api/events/{id}` | **event_detail** + `project {id, title, cover_image_id}` summary + `waiver {id,version,text}` (the project's current) + `am_leader` | 404 |
 | `POST /api/events/{id}/rsvp` | RSVP any time the event is **not over**. Idempotent (`ON CONFLICT (event_id,user_id) DO NOTHING`). → event detail | 404; 409 `event_over` |
-| `POST /api/events/{id}/checkin` | **Self-service check-in** (no QR, no waiver screen). Ensures an RSVP row, then inserts a participation pinned to the event's project's **current** waiver (I6). Re-check-in after checkout is fine while not over. → event detail | 404; 409 `event_over`; 409 `already_checked_in` |
-| `GET /api/events/{id}/rsvps` | Leader only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, created_at}]` | 403 `not_a_leader`; 404 |
+| `POST /api/events/{id}/checkin` | **Self-service, ASSERTED check-in** (no QR, no waiver screen) — "I say I was here", `attested = false` unless a sighting already exists (CHECKIN_PROOF.md §5.4). Ensures an RSVP row, then inserts a participation pinned to the event's project's **current** waiver (I6). Re-check-in after checkout is fine while not over. → event detail | 404; 409 `event_over`; 409 `already_checked_in` |
+| `GET /api/events/{id}/rsvps` | Leader only. Everyone who RSVP'd, oldest-first: `[{user: {id, display_name}, is_leader, is_checked_in` (open participation exists)`, has_participated` (any participation)`, is_attested` (a sighting exists for them at this event)`, created_at}]` | 403 `not_a_leader`; 404 |
 | `POST /api/events/{id}/rsvps/{user_id}/leader` | Leader only. `{is_leader: bool}` sets the event-leader **designation** (a flag with no powers yet — NOT `project_leaders`). → updated rsvps list | 403 `not_a_leader`; 404 `not_found` (that user never RSVP'd) |
 | `POST /api/events/{id}/close` | Leader. `open → completed`; checks out ALL open participations, minting (capped math) in the same tx. Also how an event that never happened is ended — zero-minute participations mint 0. → event detail | 403; 404; 409 `event_not_open` |
 | `POST /api/events/{id}/code/regenerate` | Leader. New `checkin_code` (old QR instantly dead) → `{checkin_code}` | 403; 404 |
 | `GET /api/events/{id}/qr.svg` | Leader. `image/svg+xml` QR of `{scheme}://{host}/#/c/{checkin_code}` — **origin = `request.url.scheme` + Host**. Behind Caddy the scheme is https (uvicorn `--proxy-headers`); on the dev LAN it is honestly `http://<ip>:8000` | 403; 404 |
-| `GET /api/events/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded}` + `checked_in_count` | 403; 404 |
+| `GET /api/events/{id}/my-qr.svg` | **My personal QR for this event** — `image/svg+xml` of `{scheme}://{host}/#/s/{my qr_token}/{id}` (same origin rule). Any **attendee** (an RSVP or a participation), not just leaders: this is the code *I* show other people so they can check in off me. Static and printable (CHECKIN_PROOF.md P5) | 403 `not_attending`; 404 |
+| `GET /api/events/{id}/roster` 📄 | Leader. Participations newest-first with `{id` (**participation id — the per-row Check-out button posts it**)`, user: {id, display_name}, checked_in_at, checked_out_at, minutes, tokens_awarded, attested}` + `checked_in_count` | 403; 404 |
 
 ## Check-in — `app/checkin.py`
 
@@ -98,6 +99,23 @@ The QR encodes a URL, so the volunteer's **native camera** opens the PWA at
 Every check-in and check-out is recorded to the internal append-only **audit log**
 (`audit_log` table) in the same tx as the change, carrying both `event_id` and
 `project_id` — no public endpoint yet.
+
+## Peer check-in (scan) — `app/scan.py`
+
+The **attested** layer (CHECKIN_PROOF.md). Everything above records what someone
+*says*; this records what someone *else's code* corroborates. A person's QR is a
+plain URL — `{scheme}://{host}/#/s/{qr_token}/{event_id}` — so it resolves through
+the in-app scanner **and** any phone's native camera, and it is static enough to
+print and pin to a wall.
+
+| Endpoint | Notes | Errors |
+|---|---|---|
+| `GET /api/scan/{qr_token}/{event_id}` | Resolve a scanned personal QR → `{person: {id, display_name}, is_self, event: event_card, project: project_card, waiver: {id,version,text}, my_open_participation \| null, already_attested}` (`already_attested` = *this* pair has already been recorded at this event; `is_self` = I scanned my own code — resolve still 200s so the UI can say something kind, only `confirm` refuses) | 404 `invalid_qr` (unknown token **or** the event is not `open`) |
+| `POST /api/scan/{qr_token}/{event_id}/confirm` | **The peer check-in**, one tx: append `attestations(event, scanner=me, subject=person)` (`ON CONFLICT DO NOTHING` — a re-scan is a no-op); ensure RSVPs for both; check the **scanner** in against the project's current waiver (the confirm screen shows it, so this is their signature) or flip their open participation to `attested`; flip the **subject's** open participation to `attested` if they have one — never create one for them (I14); `audit_log` ← `check_in` (if created) + `attest`. → **201** `{participation, person, attested: true}` | 404 `invalid_qr`; 409 `self_scan`; 409 `event_over` |
+
+A scan of someone who has not checked in yet is still stored: the sighting is real
+when it happens, and it upgrades their participation to `attested` the moment they
+do check in (CHECKIN_PROOF.md P8 / §5.4).
 
 ## Tokens — `app/tokens.py`
 

@@ -5,6 +5,11 @@ a QR check-in signs the project's waiver and records time; volunteers earn
 **impact tokens** (1 per hour) tracked in a Postgres ledger; a **catalog** matches
 needs and offers priced in tokens; anyone can tip tokens to anyone.
 
+Presence comes in two layers: tapping **Check in** is an *assertion*, while
+scanning another volunteer's personal QR is an *attestation* — one scan records
+**both** people as present, attributed to whoever held the camera. See
+[`docs/design/CHECKIN_PROOF.md`](docs/design/CHECKIN_PROOF.md).
+
 Essentialist MVP: **FastAPI + Postgres + Caddy** and a **no-build vanilla-JS PWA**,
 deployable to one VM with `docker compose`.
 
@@ -33,7 +38,7 @@ python scripts/seed.py                # optional demo data (users ana/ben/mia, p
 ```bash
 . .venv/bin/activate
 docker compose up -d postgres
-python -m pytest -q                   # 142 tests: auth, ledger invariants, all domains
+python -m pytest -q                   # 253 tests: auth, ledger invariants, all domains
 python scripts/smoke.py http://localhost:8000   # end-to-end happy-path probe (real HTTP)
 ```
 
@@ -62,7 +67,7 @@ Backups: `scripts/backup.sh` (cron-able `pg_dump`).
 ## Layout
 
 ```
-app/        FastAPI: db, auth, tokens (ledger), users, projects, checkin, catalog, images
+app/        FastAPI: db, auth, tokens (ledger), users, projects, checkin, scan, catalog, images
 app/models.py  SQLAlchemy models (schema source of truth)
 alembic/    migrations — evolve the schema over time (upgraded on boot)
 public/     the PWA — index.html shell, app.js router, api.js, ui.js, views/*
@@ -82,6 +87,8 @@ docs/       intent + the design tree (start at docs/design/OVERVIEW.md)
 | [`docs/design/FRONTEND.md`](docs/design/FRONTEND.md) | PWA screens + flows |
 | [`docs/design/DEPLOYMENT.md`](docs/design/DEPLOYMENT.md) | The go-live runbook |
 | [`docs/design/BUILD_PLAN.md`](docs/design/BUILD_PLAN.md) | TDD milestones + definition of done |
+| [`docs/design/CHECKIN_PROOF.md`](docs/design/CHECKIN_PROOF.md) | Asserted vs **attested** presence: the personal QR, peer check-in, threat model |
+| [`docs/issues/`](docs/issues/) | Known gaps found along the way |
 
 Impact tokens are internal points with no monetary value — a way to recognize
 volunteered time and social capital. See the intent doc for the philosophy.

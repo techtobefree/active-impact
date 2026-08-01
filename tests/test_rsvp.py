@@ -242,14 +242,18 @@ def test_rsvps_list_shape_and_state(register):
     assert set(by_uid) == {v1["id"], v2["id"]}
 
     row1 = by_uid[v1["id"]]
-    assert set(row1) == {"user", "is_leader", "is_checked_in", "has_participated", "created_at"}
+    assert set(row1) == {"user", "is_leader", "is_checked_in", "has_participated",
+                         "is_attested", "created_at"}
     assert set(row1["user"]) == {"id", "display_name"}
     assert row1["is_checked_in"] is True
     assert row1["has_participated"] is True
+    # Nobody scanned anybody here — the button is an assertion (CHECKIN_PROOF.md §1).
+    assert row1["is_attested"] is False
 
     row2 = by_uid[v2["id"]]
     assert row2["is_checked_in"] is False
     assert row2["has_participated"] is False
+    assert row2["is_attested"] is False
 
     part = vol1.get(f"/api/events/{eid}").json()["my_open_participation"]
     assert vol1.post(f"/api/participations/{part['id']}/checkout").status_code == 200

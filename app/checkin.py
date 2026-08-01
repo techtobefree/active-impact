@@ -24,6 +24,7 @@ from app import audit, db, serializers
 from app.auth import current_user
 from app.deps import api_error
 from app.projects import current_waiver, is_leader
+from app.scan import has_attestation
 from app.tokens import do_checkout
 
 router = APIRouter()
@@ -84,12 +85,17 @@ def agree(code: str, user: dict = Depends(current_user)):
     Leaders check in through this same endpoint (their lead screen has the code).
     One open participation per (event, user) is enforced by the partial unique
     index ``idx_participations_open`` -> a duplicate surfaces as 409.
+
+    Knowing the event code is an ASSERTION, not proof of presence -- the code is
+    on a sign anyone can photograph -- so this lands ``attested = false`` unless a
+    peer already scanned this person here (CHECKIN_PROOF.md §5.4).
     """
     event = _open_event_by_code(code)
     if not event:
         raise api_error(404, "invalid_code")
     pid = event["project_id"]
     waiver = current_waiver(pid)
+    attested = has_attestation(event["id"], user["id"])
     try:
         with db.tx() as c:
             # Ensure the volunteer appears in the organizer's RSVP list (idempotent).
@@ -99,9 +105,9 @@ def agree(code: str, user: dict = Depends(current_user)):
                 (event["id"], user["id"]),
             )
             row = c.execute(
-                "INSERT INTO participations(event_id, user_id, waiver_id) "
-                "VALUES (%s, %s, %s) RETURNING *",
-                (event["id"], user["id"], waiver["id"]),
+                "INSERT INTO participations(event_id, user_id, waiver_id, attested) "
+                "VALUES (%s, %s, %s, %s) RETURNING *",
+                (event["id"], user["id"], waiver["id"], attested),
             ).fetchone()
             audit.log(
                 c, "check_in", actor_user_id=user["id"], subject_user_id=user["id"],

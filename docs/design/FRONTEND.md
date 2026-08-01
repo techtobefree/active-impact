@@ -18,7 +18,8 @@ public/
 ├── views/auth.js           # the single CONVERT ("save your log / sign in") screen
 ├── views/records.js        # service log: feed-home, log (photo + caption), record detail
 ├── views/projects.js       # projects list (#/projects), project detail (+ its events), create, event detail, per-event lead hub (QR + roster)
-├── views/checkin.js        # the #/c/{code} landing: waiver → I agree → checked-in state
+├── views/checkin.js        # the #/c/{code} landing (event code) AND the #/s/{token}/{event} landing (peer scan)
+├── scan.js                 # in-app QR scanner: BarcodeDetector + getUserMedia overlay, graceful "unavailable"
 ├── views/catalog.js        # list (offers|needs tabs), detail, create/edit, claims
 ├── views/wallet.js         # balance, ledger, my claims (both roles), tip form
 ├── views/profile.js        # public profile, my profile edit
@@ -47,6 +48,7 @@ const routes = [
   [/^#\/events\/(\d+)$/,       views.eventDetail],    // one occurrence (optional deep link)
   [/^#\/events\/(\d+)\/lead$/, views.eventLead],      // per-event lead hub (QR/roster/close)
   [/^#\/c\/([\w-]+)$/,         views.checkin],     // QR landing (resolves an event)
+  [/^#\/s\/([\w-]+)\/(\d+)$/,  views.scan],        // PEER QR landing (a person + an event)
   [/^#\/catalog$/,             views.catalog],
   [/^#\/catalog\/new$/,        views.itemNew],
   [/^#\/catalog\/(\d+)$/,      views.itemDetail],
@@ -82,9 +84,10 @@ save account → land back on the waiver screen.* Test this path explicitly.
 | `#/projects` **Projects list** | Project cards (`GET /projects?scope=`), each **embedding one event** (`p.event`, the soonest not-over / most-recent occurrence): cover on top (**prefers the event's own cover** `p.event.cover_image_id` — an event with photos shows its own cover — else the durable project cover), then a **details-left / action-right** row — project title (`<h3>`) on the left, and if `p.event` the embedded event's 📍 location, 🗓 local time, ⏱ expected duration, checked-in count under it; the **right column** is a right-aligned stack: the event **status pill on top**, then the **shared RSVP / check-in / check-out action** (`actionEl(p.event)`, per-user state on the event) below it. The button acts **in place** (stops the card's `<a>` navigation, refreshes just that card via `GET /events/:id` so the current tab + scroll survive). `p.event == null` (a past project with no listable event) → muted "No upcoming events", no action. Upcoming excludes ended events (they fall to Past). Client + `q` search. "＋ New service project". Tabs: Upcoming · Past · Mine |
 | `#/projects/new` | `addForm` → `POST /projects` (creates the project **and its first event**): title, description, location, starts_at (`<input type="datetime-local">` → ISO), expected minutes, waiver textarea **left blank → server seeds the default template** (placeholder text says so; template lives server-side only — no client copy to drift) + banner: *"Blank uses our standard template — not legal advice. Edit to fit your project."* Location/starts_at hints note they seed the first event |
 | `#/projects/:id` | **Service project** detail (`GET /projects/:id`): primary-image cover at top, images strip (★ marks the cover; leaders get "Make primary"), title (`<h1>`) + description, a **Share · Follow · Invite** row (every signed-in viewer, three equal `.act` buttons) + a muted follower count — Share uses `navigator.share` (else copies the link + toast); Follow toggles `POST`/`DELETE /projects/:id/follow` (`{is_following, follower_count}`) and repaints the button (✓ Following + `.primary`) and count in place; Invite is a "coming soon" toast. `am_leader` → **Edit project** (title/description/waiver via `PATCH /projects/:id`). **Organizers** section (→ profiles); `am_leader` adds by email (`POST /projects/:id/leaders`) / removes by ✕ (`DELETE …/leaders/:uid`, owner irremovable — project_leaders are project-wide). Waiver (collapsed `<details>`). Then an **Events** section listing `p.events` (upcoming ASC, then past DESC): each event is a card with (if it has its own cover) a small leading `.thumb`, its 📍🗓⏱👥 meta + "You've logged Nh here" on the left and the **status pill + shared action** (`actionEl(event)`, refreshes that row via `GET /events/:id`) on the right, plus (`am_leader`) a **Manage** link → `#/events/:id/lead`. `am_leader` also gets a **＋ Add event** control (a small form: starts_at, location, expected_minutes → `POST /projects/:id/events` → refresh) |
-| `#/events/:id` | Optional per-event deep link (`GET /events/:id`): cover at top (**event's own cover** `ev.cover_image_id` else project cover) + title, that event's meta, status pill + shared `actionEl(event)`, waiver (collapsed), (`am_leader`) an **images strip** for the event's photos (★ marks the event cover) + a **Manage event** link → `#/events/:id/lead`, and a link back to the service project |
+| `#/events/:id` | Optional per-event deep link (`GET /events/:id`): cover at top (**event's own cover** `ev.cover_image_id` else project cover) + title, that event's meta, status pill + shared `actionEl(event)`, waiver (collapsed), **Show my code** for any attendee (RSVP'd or checked in) — a card with my personal QR (`<img src=blob>` of `/events/:id/my-qr.svg`), my display name under it, and a "hold this up, or print it and pin it" hint so others can check in off me, (`am_leader`) an **images strip** for the event's photos (★ marks the event cover) + a **Manage event** link → `#/events/:id/lead`, and a link back to the service project |
 | `#/events/:id/lead` | **Per-event** leader hub (`GET /events/:id` + `GET /events/:id/roster`): back-link to the parent project, project title + this event's meta, **big QR** (`<img src=blob>` of `/events/:id/qr.svg` — authed fetch), the `checkin_code` as text fallback (`am_leader` only), regenerate button (confirm, `POST /events/:id/code/regenerate`), **"Check in yourself"** link → `#/c/{code}` (leaders earn too — intent), a **Photos** section (`imagesStrip('event', …)` — leaders add/set-cover/delete the event's photos, ★ marks the event cover), roster with per-row **Check out** (`POST /participations/:id/checkout`) + live count, **Who's coming (N)** (`GET /events/:id/rsvps`): each RSVP with avatar, "checked in" pill, and an event-**leader** toggle (`POST /events/:id/rsvps/:user_id/leader`, a per-event designation — distinct from project Organizers), and **Close event** (confirm, `POST /events/:id/close`: "checks out everyone & completes"). Organizer management stays on the project detail (project-scoped) |
 | `#/c/:code` **Check-in landing** | The heart. `GET /checkin/:code` resolves an **event** → `{event, project card, current waiver, my_open_participation}`; renders the project title + **that event's** 📍🗓⏱ + **full waiver text** + `[ I agree — check me in ]`. Agree → `POST /checkin/:code/agree` → success state: "✅ You're checked in — HH:MM. Find the leader if you need anything." Already checked in → banner + Check out (`POST /participations/:id/checkout`). Invalid → friendly error + link home |
+| `#/s/:qr_token/:event_id` **Peer check-in landing** | The **attested** path (CHECKIN_PROOF.md). `GET /scan/:token/:event_id` → `{person, event, project, waiver, my_open_participation, already_attested}`; renders "**You're checking in with {person}**" + that event's 📍🗓⏱ + **full waiver text** + `[ Confirm — we're both here ]`. Confirm → `POST /scan/:token/:event_id/confirm` → "✅ Verified — {person} is your confirmation", then Check out. Scanning your own code → 409 `self_scan` → "That's your own code — scan somebody else's." Unknown token / closed event → the same friendly invalid card as `#/c/` |
 | `#/catalog` | Tabs **Offers · Needs** (`?kind=`), cards — **the whole card is the link** (`<a class="card" href="#/catalog/:id">`, like a project card): cover, plain title (`<h3>`, no nested `<a>`), status pill, 🪙 price (offers) / "need" badge + quantity, poster as **plain muted text** ("by Name" — a nested link would break the card link; the poster stays a real profile link only on the item detail). "＋ Post" |
 | `#/catalog/new` | Kind toggle first — *offer*: price 🪙 (0 = free) + optional quantity; *need*: no price, helper text "people can send you tokens from your post". Description placeholder mentions pickup/contact/coupon terms |
 | `#/catalog/:id` | Detail + role-aware actions. Viewer on offer: **Claim (N 🪙)** / claim status chip (pending→Cancel; accepted→"show this screen as proof"). Viewer on need: **Tip** (tip form, `catalog_item_id` attached). Poster: edit/close, **image upload via `imagesStrip` (poster only** — the food example needs a photo**)**, pending claims list with **Accept / Decline** (accept errors surface `insufficient_balance` as "claimant doesn't have enough tokens yet") |
@@ -178,6 +181,42 @@ roster refreshes on next render ◀──          "✅ checked in"
 … later: self checkout, leader checkout, or Close event → "🎉 +N tokens"
 ```
 
-No in-app scanner exists (D5). The event lead hub shows the code as text under
-the QR for camera-less fallback ("type it at `SITE/#/c/<code>`"). A check-in code
-belongs to one event; closing the event invalidates it.
+The event lead hub shows the code as text under the QR for camera-less fallback
+("type it at `SITE/#/c/<code>`"). A check-in code belongs to one event; closing
+the event invalidates it.
+
+## Peer check-in flow (the attested layer — CHECKIN_PROOF.md)
+
+The event QR above proves you saw *a sign*. This one is backed by a *person*.
+
+```
+ANA (already at the event)                   BEN (just arriving)
+#/events/:id → "Show my code"                taps [ Check in ]
+GET /events/:id/my-qr.svg → blob → big <img>       │
+        │                                          ├─ scanner available? ──yes──► overlay opens
+        │                                          │      BarcodeDetector reads Ana's code
+        │  ◄──────── camera ────────────────────── │      → route to #/s/{ana}/{event}
+        │  (or Ben's NATIVE camera on a printed     │            │
+        │   sheet — the QR is just a URL)           │            ▼
+        │                                          │      GET /api/scan/{ana}/{event} → waiver screen
+        │                                          │      [ Confirm — we're both here ]
+        │                                          │            ▼ POST …/confirm (201)
+Ana's participation flips to attested ◀────────────┘      "✅ Verified — Ana is your confirmation"
+                                                   │
+                                                   └─ no scanner / denied / no camera
+                                                          toast "Camera scanning isn't available
+                                                          here — checking you in as self-reported"
+                                                          → POST /events/:id/checkin  (asserted)
+```
+
+**Cancelling the scanner is not the same as it being unavailable.** Backing out
+does nothing (it was a decision); *unavailable* falls through to the asserted
+check-in, which is the founder's stated requirement.
+
+`BarcodeDetector` is Chromium-only today, so the fallback is the common path on
+iOS — and there the **native camera still works** on a printed code, because the
+peer QR is a plain URL. No scanning library, no build step, no new dependency (D4).
+
+A checked-in state renders as one of two pills wherever it appears (event detail,
+roster, lead hub): **`✅ Verified`** (`attested`) or **`● Self-reported`**. The
+wording is deliberately neutral — self-reported is a legitimate outcome.

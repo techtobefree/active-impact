@@ -25,7 +25,7 @@ if host not in ("localhost", "127.0.0.1", "::1"):
 import secrets
 
 from app import db, tokens
-from app.auth import _hash_password
+from app.auth import _hash_password, new_qr_token
 
 
 def user(email, display):
@@ -34,10 +34,10 @@ def user(email, display):
         return row
     with db.tx() as c:
         return c.execute(
-            "INSERT INTO users(email, password_hash, display_name, bio) "
-            "VALUES (%s, %s, %s, %s) RETURNING *",
+            "INSERT INTO users(email, password_hash, display_name, bio, qr_token) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING *",
             (email, _hash_password("password123"), display,
-             f"Demo account for {display}."),
+             f"Demo account for {display}.", new_qr_token()),
         ).fetchone()
 
 

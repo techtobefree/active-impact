@@ -18,8 +18,10 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         │                      ├── follows           (interest / bookmark; drives follower_count)
         │                      └── events ──┬── rsvps          (RSVP intent; is_leader = event-leader
         │                        (occurrence)│                  DESIGNATION, a flag with no powers yet)
-        │                                    └── participations (check-in/out; the WAIVER SIGNATURE;
-        │                                                        source of minutes → tokens)
+        │                                    ├── participations (check-in/out; the WAIVER SIGNATURE;
+        │                                    │                   source of minutes → tokens)
+        │                                    └── attestations   (append-only SIGHTINGS: scanner reports
+        │                                                        subject was here — CHECKIN_PROOF.md)
         ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
         ├── token_entries              (append-only ledger: earn | tip | spend)
         ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
@@ -118,6 +120,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name  TEXT NOT NULL,
   bio           TEXT NOT NULL DEFAULT '',
   balance       INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),  -- cached ledger sum
+  qr_token      TEXT NOT NULL UNIQUE,          -- secrets.token_urlsafe(8); my permanent opaque handle, the thing my personal QR carries (CHECKIN_PROOF.md §3)
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -226,6 +229,7 @@ CREATE TABLE IF NOT EXISTS participations (
   checked_out_at  TIMESTAMPTZ,
   minutes         INTEGER CHECK (minutes >= 0),            -- actual elapsed, half-up
   tokens_awarded  INTEGER CHECK (tokens_awarded >= 0),     -- from CAPPED minutes; may be 0
+  attested        BOOLEAN NOT NULL DEFAULT false,          -- someone else's QR corroborates this (CHECKIN_PROOF.md)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- One OPEN participation per user per event (re-check-in after checkout is fine).
@@ -233,6 +237,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_participations_open
   ON participations(event_id, user_id) WHERE checked_out_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_participations_user  ON participations(user_id);
 CREATE INDEX IF NOT EXISTS idx_participations_event ON participations(event_id);
+
+-- ---- presence proof (CHECKIN_PROOF.md) ---------------------------------------
+
+-- APPEND-ONLY sightings. One row = "scanner reports subject's personal QR was in
+-- front of them, at this event". A single row is evidence about BOTH people; it
+-- keeps its direction so who-reported-whom survives. The UNIQUE makes a re-scan a
+-- no-op rather than an error. A scan never creates a participation for the
+-- SUBJECT — that would forge their waiver signature (I14).
+CREATE TABLE IF NOT EXISTS attestations (
+  id              BIGSERIAL PRIMARY KEY,
+  event_id        BIGINT  NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  scanner_user_id INTEGER NOT NULL REFERENCES users(id),   -- who scanned (the reporter)
+  subject_user_id INTEGER NOT NULL REFERENCES users(id),   -- whose code was scanned
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_attestations_not_self CHECK (scanner_user_id <> subject_user_id),
+  CONSTRAINT uq_attestations_event_scanner_subject UNIQUE (event_id, scanner_user_id, subject_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_attestations_event   ON attestations(event_id);
+CREATE INDEX IF NOT EXISTS idx_attestations_subject ON attestations(subject_user_id);
 
 -- ---- impact tokens ----------------------------------------------------------
 
@@ -452,6 +475,9 @@ volunteers (flat rate is intent).
 | I10 | Only active, in-quantity `offer`s can be claimed (every offer is priced; 0 = free); quantity hits 0 → item `closed` |
 | I11 | Check-in requires the presented `checkin_code` to match an `open` event |
 | I12 | Checkout math: the 29/30/89/90/150-minute boundaries **and** the mint cap (600 elapsed @ 120 expected → 4 tokens) above |
+| I13 | An `attestations` row always names two **different** users (CHECK) and is unique per (event, scanner, subject) — a repeat scan is a no-op, never an error |
+| I14 | A scan never creates a participation for the **subject**; the scanner's participation always carries a `waiver_id` from the event's project (I6 holds for every row, however created) |
+| I15 | `participations.attested` is true ⟺ an attestation for that (event, user) existed at or before the participation was written — set at insert, and flipped by a later scan only on a participation that is still open |
 
 ## Standard read shapes (used by API.md)
 

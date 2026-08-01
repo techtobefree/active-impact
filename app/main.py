@@ -20,6 +20,7 @@ from app.users import router as users_router
 from app.projects import router as projects_router
 from app.events import router as events_router
 from app.checkin import router as checkin_router
+from app.scan import router as scan_router
 from app.tokens import router as tokens_router
 from app.catalog import router as catalog_router
 from app.images import router as images_router
@@ -81,6 +82,7 @@ api.include_router(users_router)
 api.include_router(projects_router)
 api.include_router(events_router)
 api.include_router(checkin_router)
+api.include_router(scan_router)
 api.include_router(tokens_router)
 api.include_router(catalog_router)
 api.include_router(images_router)

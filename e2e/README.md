@@ -42,6 +42,12 @@ Per-step screenshots land in `e2e/screenshots/<test>/NN-step.png` for review.
   login says so; sign in/out.
 - **projects** — create a project, open the lead screen (QR renders), self
   check-in via the waiver, check out.
+- **peer check-in** — one scan checks in **two** people: Ana checks in with the
+  button (self-reported), Ben opens her personal code in his own browser context
+  and confirms, and Ana flips to verified without touching her phone. Also covers
+  scanning your own code and an unknown code. Headless Chrome has no
+  `BarcodeDetector`, so the Check in button here doubles as the test of the
+  documented fallback — no scanner → plain asserted check-in.
 - **catalog** — post an offer; a second user finds and claims it.
 - **wallet & profile** — insufficient-balance tip is explained; a funded (seeded)
   user tips another; profile edit persists.

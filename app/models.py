@@ -60,6 +60,11 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(Text, nullable=False)  # public identity (1-60 chars, non-unique)
     bio: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     balance: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")  # cached ledger sum
+    # My permanent, opaque, public handle -- the only thing my personal QR carries
+    # (CHECKIN_PROOF.md §3/§4). Same generator as events.checkin_code. Minted with
+    # the row (guest or real) and never reissued; it survives a guest ATTACH (same
+    # row gains credentials) and dies with the guest row on a MERGE.
+    qr_token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # secrets.token_urlsafe(8)
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
@@ -177,6 +182,10 @@ class Participation(Base):
     checked_out_at: Mapped[datetime | None] = mapped_column(TS)
     minutes: Mapped[int | None] = mapped_column(Integer)  # half-up elapsed
     tokens_awarded: Mapped[int | None] = mapped_column(Integer)  # from capped minutes
+    # Did anyone else's QR corroborate this? false = ASSERTED (the button, the event
+    # code); true = ATTESTED (a peer scan). Pinned to THIS participation, so a
+    # sighting today never vouches for a shift closed last week. CHECKIN_PROOF.md I15.
+    attested: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("minutes >= 0", name="minutes_nonneg"),
@@ -186,6 +195,35 @@ class Participation(Base):
               unique=True, postgresql_where=text("checked_out_at IS NULL")),
         Index("idx_participations_user", "user_id"),
         Index("idx_participations_event", "event_id"),
+    )
+
+
+class Attestation(Base):
+    """An append-only SIGHTING: "scanner reports subject's personal QR was in front
+    of them, at this event" (CHECKIN_PROOF.md §5).
+
+    One row is evidence about BOTH people, and it keeps its direction so
+    who-reported-whom survives any later dispute. The UNIQUE makes a re-scan a
+    no-op rather than a 409 -- two people meeting twice at one event is one fact.
+    A scan never creates a participation for the SUBJECT; that would forge their
+    waiver signature (I14).
+    """
+    __tablename__ = "attestations"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    event_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
+    scanner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)  # who scanned (the reporter)
+    subject_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)  # whose code was scanned
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        # Explicit full names: a UniqueConstraint keeps its literal name (the
+        # naming convention's "uq" key has no %(constraint_name)s), so model and
+        # migration 0009 must spell it identically or they diverge. The CHECK does
+        # go through the convention -> ck_attestations_not_self.
+        CheckConstraint("scanner_user_id <> subject_user_id", name="not_self"),
+        UniqueConstraint("event_id", "scanner_user_id", "subject_user_id",
+                         name="uq_attestations_event_scanner_subject"),
+        Index("idx_attestations_event", "event_id"),
+        Index("idx_attestations_subject", "subject_user_id"),
     )
 
 

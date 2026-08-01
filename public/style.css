@@ -158,6 +158,29 @@ input.invalid, textarea.invalid { border-color: var(--red); outline-color: color
 .qr svg, .qr img { width: 100%; max-width: 280px; height: auto; }
 .code { font-family: ui-monospace, monospace; font-size: 1.1rem; letter-spacing: .1em; }
 
+/* ---- in-app QR scanner (CHECKIN_PROOF.md §7) ----
+   Full-viewport takeover: the camera IS the screen while it is up. */
+.scanner {
+  position: fixed; inset: 0; z-index: 100; background: #000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 1rem calc(1rem + env(safe-area-inset-right)) calc(1rem + env(safe-area-inset-bottom)) calc(1rem + env(safe-area-inset-left));
+  gap: 1rem;
+}
+.scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* The viewfinder + hint + Cancel ride ABOVE the video. */
+.scanner-frame {
+  position: relative; width: min(72vw, 300px); aspect-ratio: 1;
+  border: 3px solid #fff; border-radius: 18px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+}
+.scanner-hint { position: relative; color: #fff; text-align: center; margin: 0; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
+.scanner .act { position: relative; max-width: 320px; }
+
+/* Asserted vs attested presence. Neutral wording both ways — self-reported is a
+   legitimate outcome, not a failure (CHECKIN_PROOF.md §7.3). */
+.pill.verified { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.pill.selfreported { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+
 /* ---- bottom nav ---- */
 #nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;

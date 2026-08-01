@@ -1,7 +1,14 @@
-// The #/c/{code} QR landing — the core on-site moment.
-// Native camera opened SITE/#/c/{code}; the router already ensured we're logged
-// in (return-to). We resolve the code, show the project + full waiver, and drive
-// I-agree (check-in) → checked-in → check-out (mint) with warm, reassuring states.
+// The two on-site landings.
+//
+// #/c/{code} — the EVENT code. Native camera opened SITE/#/c/{code}; the router
+// already ensured we're logged in (return-to). We resolve the code, show the
+// project + full waiver, and drive I-agree (check-in) → checked-in → check-out
+// (mint) with warm, reassuring states. This is an ASSERTION: knowing a code that
+// is printed on a sign proves you saw the sign, nothing more.
+//
+// #/s/{qr_token}/{event_id} — a PERSON's code, reached from the in-app scanner or
+// any native camera. Confirming it records BOTH of us as present, attributed to
+// me, the one holding the camera. That is the ATTESTED layer (CHECKIN_PROOF.md).
 import { api } from '../api.js';
 import {
   el, mount, esc, spinner, toast, toastErr, errMessage, fmtDateTime, fmtDuration,
@@ -15,7 +22,7 @@ export async function checkinView(code) {
     data = await api('/checkin/' + encodeURIComponent(code));
   } catch (e) {
     if (e && e.status === 404) { mount(invalidCard()); return; }
-    mount(problemCard(code, e));
+    mount(problemCard(() => checkinView(code), e));
     return;
   }
 
@@ -24,13 +31,81 @@ export async function checkinView(code) {
   const { event, project, waiver, my_open_participation } = data;
   const action = el('<div class="card stack center"></div>');
   if (my_open_participation) {
-    renderCheckedIn(action, project, my_open_participation.id, my_open_participation.checked_in_at);
+    renderCheckedIn(action, project, my_open_participation.id,
+      my_open_participation.checked_in_at, my_open_participation.attested);
   } else {
     renderAgree(action, code, project);
   }
   const root = el('<div class="stack"></div>');
   root.append(summaryCard(project, event), waiverBox(waiver), action);
   mount(root);
+}
+
+// ---- #/s/{qr_token}/{event_id} — the peer check-in -------------------------
+
+export async function scanView(qrToken, eventId) {
+  mount(spinner());
+  const path = '/scan/' + encodeURIComponent(qrToken) + '/' + encodeURIComponent(eventId);
+  let data;
+  try {
+    data = await api(path);
+  } catch (e) {
+    if (e && e.status === 404) { mount(invalidCard(true)); return; }
+    mount(problemCard(() => scanView(qrToken, eventId), e));
+    return;
+  }
+
+  const { person, is_self: isSelf, event, project, waiver, my_open_participation: mine } = data;
+  const action = el('<div class="card stack center"></div>');
+  if (isSelf) {
+    renderOwnCode(action, project);
+  } else if (mine && mine.attested) {
+    // Already verified here — nothing to gain from confirming again.
+    renderCheckedIn(action, project, mine.id, mine.checked_in_at, true);
+  } else {
+    renderConfirm(action, path, person, project);
+  }
+
+  const root = el('<div class="stack"></div>');
+  root.append(withWhoCard(project, event, person, isSelf), waiverBox(waiver), action);
+  mount(root);
+}
+
+// The summary card, plus who this code belongs to — the whole point of the screen.
+function withWhoCard(project, event, person, isSelf) {
+  const c = summaryCard(project, event);
+  c.prepend(el(isSelf
+    ? '<div class="banner warn center">This is <strong>your own</strong> code</div>'
+    : `<div class="banner info center">Checking in with <strong>${esc(person.display_name)}</strong></div>`));
+  return c;
+}
+
+function renderConfirm(container, path, person, project) {
+  container.replaceChildren();
+  container.append(el(
+    `<p class="muted">${esc(person.display_name)} is here with you. Confirming records you both as present — and signs the waiver above for you.</p>`,
+  ));
+  const btn = el("<button class=\"act primary block big\">Confirm — we're both here</button>");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const res = await api(path + '/confirm', { method: 'POST' });
+      const p = res.participation || {};
+      toast('✅ Verified');
+      renderCheckedIn(container, project, p.id, p.checked_in_at, true);
+    } catch (e) {
+      btn.disabled = false;
+      if (e && (e.status === 409 || e.status === 404)) { toast(errMessage(e)); refresh(); return; }
+      toastErr(e);
+    }
+  };
+  container.append(btn);
+}
+
+function renderOwnCode(container, project) {
+  container.replaceChildren();
+  container.append(el('<p class="muted center">Hold it up so somebody else can scan it — a code only counts when another person reads it.</p>'));
+  container.append(links(project));
 }
 
 // ---- pieces ----------------------------------------------------------------
@@ -79,12 +154,14 @@ function renderAgree(container, code, project) {
   container.append(btn);
 }
 
-function renderCheckedIn(container, project, participationId, checkedInAt) {
+function renderCheckedIn(container, project, participationId, checkedInAt, attested = false) {
   container.replaceChildren();
   container.append(el(
-    `<div class="banner info center"><strong>✅ You're checked in</strong>${checkedInAt ? ' — ' + esc(fmtDateTime(checkedInAt)) : ''}</div>`,
+    `<div class="banner info center"><strong>${attested ? '✅ Verified — you\'re checked in' : "✅ You're checked in"}</strong>${checkedInAt ? ' — ' + esc(fmtDateTime(checkedInAt)) : ''}</div>`,
   ));
-  container.append(el('<p class="muted center">You\'re all set. Find the leader if you need anything.</p>'));
+  container.append(el(attested
+    ? '<p class="muted center">Somebody here confirmed it. You\'re all set.</p>'
+    : '<p class="muted center">You\'re all set. Find the leader if you need anything.</p>'));
 
   const out = el('<button class="act block big">Check out</button>');
   out.onclick = async () => {
@@ -122,19 +199,21 @@ function links(project) {
   return row;
 }
 
-function invalidCard() {
+function invalidCard(peer = false) {
   const c = el('<div class="card stack center"></div>');
   c.append(el("<h2>That code didn't work</h2>"));
-  c.append(el('<p class="muted">This check-in code is invalid or the project has ended.</p>'));
+  c.append(el(`<p class="muted">${peer
+    ? "This personal code is no longer valid, or the event has ended. Ask them to open their code again."
+    : 'This check-in code is invalid or the project has ended.'}</p>`));
   c.append(el('<a class="act primary" href="#/projects">Back to projects</a>'));
   return c;
 }
 
-function problemCard(code, e) {
+function problemCard(retryFn, e) {
   const c = el('<div class="card stack center"></div>');
   c.append(el(`<p>${esc(errMessage(e))}</p>`));
   const retry = el('<button class="act primary">Try again</button>');
-  retry.onclick = () => checkinView(code);
+  retry.onclick = retryFn;
   c.append(retry);
   c.append(el('<a class="act ghost" href="#/">Home</a>'));
   return c;

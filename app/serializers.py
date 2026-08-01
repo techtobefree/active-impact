@@ -30,6 +30,9 @@ def me_shape(row: dict) -> dict:
     """
     shape = {k: row[k] for k in ("id", "email", "display_name", "bio", "balance", "created_at")}
     shape["is_guest"] = row["email"] is None
+    # My personal QR handle. PRIVATE view only -- a code is handed out by its
+    # owner (they show it), never scraped off a public profile (CHECKIN_PROOF.md §3).
+    shape["qr_token"] = row["qr_token"]
     return shape
 
 
@@ -125,9 +128,15 @@ def event_state_maps(event_ids: list[int], user_id: int) -> dict[int, dict]:
         )
     }
     open_map = {
-        r["event_id"]: {"id": r["id"], "checked_in_at": r["checked_in_at"]}
+        r["event_id"]: {
+            "id": r["id"],
+            "checked_in_at": r["checked_in_at"],
+            # false = asserted ("I say I was here"), true = a peer scan
+            # corroborated it (CHECKIN_PROOF.md §1).
+            "attested": bool(r["attested"]),
+        }
         for r in db.query(
-            "SELECT DISTINCT ON (event_id) event_id, id, checked_in_at "
+            "SELECT DISTINCT ON (event_id) event_id, id, checked_in_at, attested "
             "FROM participations "
             "WHERE user_id=%s AND checked_out_at IS NULL AND event_id = ANY(%s) "
             "ORDER BY event_id",

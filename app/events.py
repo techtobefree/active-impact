@@ -25,6 +25,7 @@ from app import audit, db, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.projects import current_waiver, is_leader, new_code
+from app.scan import has_attestation
 from app.tokens import do_checkout
 
 router = APIRouter()
@@ -73,6 +74,10 @@ def _event_rsvps(event_id: int) -> list[dict]:
                 "is_leader": r["is_leader"],
                 "is_checked_in": is_checked_in,
                 "has_participated": has_participated,
+                # Somebody's scan puts them at this event — true even before they
+                # check in themselves, so the organizer can see who is actually
+                # here (CHECKIN_PROOF.md §6).
+                "is_attested": has_attestation(event_id, uid),
                 "created_at": r["created_at"],
             }
         )
@@ -137,8 +142,13 @@ def rsvp(event_id: int, user: dict = Depends(current_user)):
 
 @router.post("/events/{event_id}/checkin")
 def self_checkin(event_id: int, user: dict = Depends(current_user)):
-    """Self-service check-in (no QR): ensure an RSVP, then create a participation
-    pinned to the event's project's CURRENT waiver (I6). Silent waiver pin."""
+    """Self-service, ASSERTED check-in (no QR): ensure an RSVP, then create a
+    participation pinned to the event's project's CURRENT waiver (I6).
+
+    "I say I was here" — ``attested`` is false unless somebody already scanned
+    this person at this event, in which case the sighting catches up with them
+    (CHECKIN_PROOF.md P8 / §5.4). Silent waiver pin.
+    """
     ev = _get_event(event_id)
     if not ev:
         raise api_error(404, "not_found")
@@ -146,6 +156,7 @@ def self_checkin(event_id: int, user: dict = Depends(current_user)):
         raise api_error(409, "event_over")
     pid = ev["project_id"]
     waiver = current_waiver(pid)
+    attested = has_attestation(event_id, user["id"])
     try:
         with db.tx() as c:
             c.execute(
@@ -154,9 +165,9 @@ def self_checkin(event_id: int, user: dict = Depends(current_user)):
                 (event_id, user["id"]),
             )
             part = c.execute(
-                "INSERT INTO participations(event_id, user_id, waiver_id) "
-                "VALUES (%s, %s, %s) RETURNING id",
-                (event_id, user["id"], waiver["id"]),
+                "INSERT INTO participations(event_id, user_id, waiver_id, attested) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (event_id, user["id"], waiver["id"], attested),
             ).fetchone()
             audit.log(
                 c, "check_in", actor_user_id=user["id"], subject_user_id=user["id"],
@@ -268,6 +279,7 @@ def roster(
             "checked_out_at": r["checked_out_at"],
             "minutes": r["minutes"],
             "tokens_awarded": r["tokens_awarded"],
+            "attested": bool(r["attested"]),  # verified by a peer scan vs self-reported
         }
         for r in rows
     ]
