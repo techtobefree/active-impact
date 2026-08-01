@@ -75,6 +75,23 @@ geolocation, a target lookup, a paginated feed — runs detached and repaints wh
 it lands, guarded by `node.isConnected` so a departed screen paints nothing. That
 is now the pattern in `logView` and `recordFeed`.
 
+## The same family, found later (2026-08-01, all fixed)
+
+Serializing the views fixed *view vs view*. Three more paints from the same
+family turned up when the e2e suite was run against the **live site**, where the
+guest mint takes ~150ms instead of ~1ms:
+
+| Where | What happened | Fix |
+|---|---|---|
+| **Boot vs a live screen** | Boot awaits the guest mint, so a hashchange could paint first — then boot's own `render()` rebuilt that screen from scratch, blanking a half-typed form. The failing screenshot was a register form with "Please fill out this field". | Boot renders only `if (!hasRendered)`. |
+| **The auth gate vs the mint** | A QR deep link arriving before the mint hit `!getToken()` and bounced to the convert screen — asking someone to sign up because the network was slow. | The gate `await`s `ensureSession()` (single-flight) and only falls back when genuinely offline. |
+| **A form submit vs the mint** | `POST /auth/convert` needs a session; submitting a filled form during a cold open 401'd. | The convert submit awaits `ensureSession()` too. |
+
+The through-line: **anything that paints or posts must wait for the session, and
+nothing may repaint a screen the user is already using.** Every one of these was
+invisible on localhost and reproducible against production, which is the argument
+for running the browser suite against the deployed site as a matter of course.
+
 ## Residual limitation
 
 A view whose *mounting* fetch hangs still delays the next view (never the chrome).
