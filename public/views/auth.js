@@ -6,7 +6,7 @@
 // (already real) -> just go home; 422 = bad shape (surfaced per field by addForm).
 import { api, setSession, currentUser, getToken, popReturn, peekReturn } from '../api.js';
 import { el, mount, addForm } from '../ui.js';
-import { refreshMe } from '../app.js';
+import { ensureSession, refreshMe } from '../app.js';
 
 // Live guards for the traps real users hit: stray spaces (often re-inserted by
 // autofill) and phone auto-capitalization in the email field.
@@ -45,6 +45,11 @@ export function convertForm({ title, onSuccess } = {}) {
     submit: 'Create account',
     onSubmit: async (body) => {
       try {
+        // Convert turns THE GUEST YOU ARE into an account, so it needs a session.
+        // On a cold open (or straight after sign-out) the guest mint can still be
+        // in flight while someone submits — wait for it rather than 401ing on a
+        // filled-in form. Single-flight, so this never mints a spare guest.
+        if (!getToken()) await ensureSession();
         const data = await api('/auth/convert', { body, authChallenge: true });
         setSession(data.token, data.user);
         await refreshMe();
