@@ -1,0 +1,150 @@
+# Social — following people, their activity, blocking, notifications (design)
+
+> Until now the only relationship in Active Impact was person → project. This adds
+> **person → person**: follow someone, see what they do (log a service, RSVP,
+> check in), have that show up in your feed, keep a list of your followers, and
+> **block** one so they stop seeing what you do — without losing them as a
+> follower. Plus the notification layer the founder asked for: *tell me when the
+> people I follow RSVP or check into something.*
+>
+> Read alongside [DOMAIN.md](./DOMAIN.md), [FEED.md](./FEED.md) (the one-feed
+> principle this must not break) and [SERVICE_LOG.md](./SERVICE_LOG.md) (guests
+> are first-class people here too).
+>
+> Source of intent: `../intent.md` § "Connect with others".
+
+---
+
+## 1. Decisions
+
+| # | Decision | Rationale |
+|---|---|---|
+| **S1** | **Following a person is a new relation**, `user_follows(follower_id, followee_id)` — deliberately separate from the existing project `follows`. | Same English word, different object. Both stay what they are: an interest signal with no powers. Overloading one table to mean two things would poison every query that touches either. |
+| **S2** | **Three actions are public activity**: `logged` (a service record), `rsvp`, `checked_in`. Written to an `activities` row **in the same transaction** as the action itself. | Exactly the three the founder named. Same-tx is the house rule already used for `audit_log`: an activity can never exist without its action, nor an action without its activity. |
+| **S3** | **`activities` is a public projection; `audit_log` stays internal.** Two append-only tables on purpose. | An audit row is a reporting record and must never be reshaped for display; an activity row is public and is *deleted with its subject*. Merging them would tie the ledger's shape to the feed's. The duplicated write is two lines. |
+| **S4** | **Blocking is a one-way visibility mute that KEEPS the follow.** They stay a follower, stop seeing my activity, and can be unblocked. They are not told. | Verbatim from the founder: *"we can block them so they can't see what we do — they remain our followers, and we can unblock them if we choose to."* Unusual (most apps drop the follow); it is what was asked for, so it is what it does. |
+| **S5** | **A block covers the activity surfaces, not public project content.** Blocked people stop seeing my activity feed and my profile's activity; my photo on a project card — content *about a public event* — stays. | My activity stream is about *me*; a project's feed is about the project. Filtering public event content per viewer would also mean no cacheable public read anywhere. **Flagged**: if the founder wants a total block, that is a bigger, slower change and should be decided deliberately (§7). |
+| **S6** | **Notifications are DERIVED, not fanned out.** No `notifications` table: unread = activities by people I follow, of notifiable kinds, newer than my `notifications_seen_at` watermark. | One column instead of a row per user per event. Nothing to backfill, nothing to keep in sync, and the badge can never disagree with the list it opens. |
+| **S7** | **Notifiable kinds are `rsvp` and `checked_in`.** A logged service appears in the feed but does not ping. | *"…notified of when your friends are going to RSVP or check into things."* Photos are ambient; someone turning up somewhere is the thing worth a nudge. Per-user on/off (`notify_activity`), default **on**. |
+| **S8** | **In-app notifications only** — a bell with an unread dot and a screen. Web push (permission prompts, VAPID keys, service-worker push handlers) stays deferred. | OVERVIEW.md already defers push. The bell delivers the value; push is a self-contained follow-on that needs its own pass. |
+| **S9** | **Home gains a `Following` tab** rather than mixing activity into the project cards. | FEED.md F2 collapsed two feeds into one and that must hold. Activity items are a different shape from project cards; giving them a tab keeps one screen and one scroll without re-fragmenting the card. |
+| **S10** | **Messaging is still not built** (OVERVIEW D8). The profile offers **Follow** and **Tip**. | The founder listed messaging as an example of "things you can do", not a requirement here. It is a whole domain (threads, delivery, moderation, abuse); naming it as still-deferred is more honest than a stub button. |
+| **S11** | **Guests participate fully.** A guest can follow, be followed, block, and appear in activity. | SERVICE_LOG.md §4: a guest is a real `users` row. Excluding them would make the social layer invisible to most first-time users. |
+
+## 2. Schema delta
+
+```sql
+-- Person → person. Distinct from `follows` (person → project).
+CREATE TABLE IF NOT EXISTS user_follows (
+  id          SERIAL PRIMARY KEY,
+  follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_user_follows_not_self CHECK (follower_id <> followee_id),
+  CONSTRAINT uq_user_follows UNIQUE (follower_id, followee_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_follows_followee ON user_follows(followee_id);
+
+-- "This person may not see my activity." The follow row is untouched (S4).
+CREATE TABLE IF NOT EXISTS blocks (
+  id         SERIAL PRIMARY KEY,
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- me
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- them
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_blocks_not_self CHECK (blocker_id <> blocked_id),
+  CONSTRAINT uq_blocks UNIQUE (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
+
+-- APPEND-ONLY public projection of what someone did (S2/S3). CASCADE on the
+-- subject: deleting a service record deletes its activity, because the feed must
+-- not point at something that no longer exists.
+CREATE TABLE IF NOT EXISTS activities (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- who did it
+  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in')),
+  event_id   BIGINT  REFERENCES events(id) ON DELETE CASCADE,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  record_id  BIGINT  REFERENCES service_records(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activities_user    ON activities(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_activities_created ON activities(created_at DESC);
+
+ALTER TABLE users
+  ADD COLUMN notifications_seen_at TIMESTAMPTZ,          -- the unread watermark (S6)
+  ADD COLUMN notify_activity BOOLEAN NOT NULL DEFAULT true;  -- the on/off switch (S7)
+```
+
+**No back-fill.** Existing check-ins and records predate the feed; inventing
+activity rows for them would put months-old "just checked in" items at the top of
+everybody's first Following feed. The stream starts now — same reasoning as
+FEED.md §8.
+
+## 3. Visibility — one rule, applied everywhere
+
+> **Someone I have blocked never sees my activity.**
+
+Every activity read passes through the same filter: drop rows whose author has
+blocked the viewer. Concretely, `WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE
+blocker_id = activities.user_id AND blocked_id = :viewer)` — one clause, in one
+helper, used by the profile feed, the Following feed, and the notification count
+alike. A rule enforced in three places is a rule that will be enforced in two.
+
+The viewer always sees **their own** activity (you cannot block yourself — CHECK).
+
+## 4. API
+
+| Endpoint | Notes |
+|---|---|
+| `POST /api/users/{id}/follow` | Idempotent. → `{is_following: true, follower_count}`. 409 `cannot_follow_self` |
+| `DELETE /api/users/{id}/follow` | Idempotent. → `{is_following: false, follower_count}` |
+| `GET /api/users/{id}/followers` 📄 | **person_card[]** (`id, display_name, is_guest, is_following` (do *I* follow them), `is_blocked` (have I blocked them — only meaningful on my own list)) |
+| `GET /api/users/{id}/following` 📄 | same shape |
+| `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first, filtered by §3 |
+| `POST /api/users/{id}/block` · `DELETE …/block` | Mine only, idempotent → `{is_blocked}`. Never touches `user_follows` (S4) |
+| `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, newest first, §3-filtered. Powers the Following tab |
+| `GET /api/notifications` 📄 | `{unread, items: activity_card[]}` — items are notifiable kinds from my followees, §3-filtered; `unread` counts those after my watermark |
+| `POST /api/notifications/seen` | Sets `notifications_seen_at = now()` → `{unread: 0}` |
+| `PATCH /api/me` | Body gains `notify_activity?: bool` |
+| `GET /api/users/{id}` | Gains `is_following`, `follower_count`, `following_count`, `is_blocked` |
+
+**activity_card**: `{id, kind, actor {id, display_name, is_guest}, created_at,
+event {id, project_id, project_title, starts_at, location_text} | null,
+record: record_card | null}`. A `logged` activity embeds the full record card, so
+the Following feed shows the photo itself rather than a line about a photo.
+
+**person_card** never carries an email (D3), like every other public shape.
+
+## 5. Screens
+
+| Route | Change |
+|---|---|
+| `#/u/:id` **Their page** | Info at the top (avatar, name, bio, joined, the existing ⏱🪙📋 stats), then the actions — **Follow / Following** toggle and **Tip** — then **their activity feed**. Follower/following counts are tappable. |
+| `#/u/:id/followers` · `#/u/:id/following` | The two lists. Each row is a person (tap → their page). On **my own** followers list every row also carries **Block / Unblock** — the founder's exact ask, on the exact screen they asked for it. |
+| `#/me` | Gains a **Followers · Following** row with counts (→ the lists above), and the **notification preference** toggle. |
+| `#/` **Home** | Tabs become **Upcoming · Following · Past · Mine**. Following renders activity cards: who, what, when, and for a logged service the photo itself. Empty state points at finding people to follow. |
+| `#/notifications` | The bell's screen: notifiable activity newest-first, plus the on/off preference. Opening it marks everything seen. |
+| App bar | Gains a **🔔** with an unread dot (polled with the existing version check, not a new timer). |
+
+## 6. Invariants
+
+| # | Invariant |
+|---|---|
+| **S-I1** | Nobody follows or blocks themselves (CHECK, both tables). |
+| **S-I2** | Follow and block are idempotent — one row per pair, a repeat is a no-op, not an error. |
+| **S-I3** | Blocking someone does **not** remove their follow: they stay in my followers list and in `follower_count`. |
+| **S-I4** | A blocked viewer sees none of my activity in *any* surface — profile, Following feed, or notification count — and unblocking restores all of it exactly. |
+| **S-I5** | An activity row exists **iff** its action did (same tx), and is deleted with its subject (record/event/project). |
+| **S-I6** | The Following feed contains only activity from people I follow, never my own. |
+| **S-I7** | `unread` = notifiable activity from my followees, after my watermark, §3-filtered; `POST /notifications/seen` makes it exactly 0. |
+| **S-I8** | No follower/following/activity shape ever exposes an email. |
+
+## 7. Deliberately deferred (with the reasoning, so it can be revisited)
+
+- **A total block** (S5) — hiding my *content* (photos on project cards), not just my activity. Bigger and per-viewer; the founder should decide it deliberately rather than inherit it.
+- **Web push** (S8) — the bell first; push is its own pass.
+- **Messaging** (S10, D8).
+- **Mutual-follow "friends"**, follow requests, private accounts — following is one-way and public here.
+- **Muting** (I stop seeing *them* without unfollowing) — the inverse of a block. Nobody has asked for it; unfollow covers it.
+- **Notification digests / email** — no email addresses are collected for guests, and there is no sender.

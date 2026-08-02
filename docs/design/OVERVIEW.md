@@ -20,7 +20,10 @@
 > (supersedes SERVICE_LOG.md §3's "never link a record to an event") ·
 > [LOCATIONS.md](./LOCATIONS.md) — the address book the app builds itself: every
 > address typed becomes a **location**, suggested next time, and remembering
-> where it is
+> where it is ·
+> [SOCIAL.md](./SOCIAL.md) — **person → person**: follow someone, see their
+> activity (logged · RSVP'd · checked in) on their page and in a Following tab,
+> keep a follower list, **block** without losing the follower, and get notified
 >
 > Known gaps live in [`../issues/`](../issues/).
 >
