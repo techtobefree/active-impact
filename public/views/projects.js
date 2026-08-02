@@ -226,7 +226,13 @@ export async function listView() {
       ? "Nothing yet. Open somebody's profile and follow them to see what they do."
       : 'No projects yet. Post the first one.';
 
+  // Tab taps and keystrokes both call load(), so two can be in flight at once —
+  // and the slower one used to win the paint, putting project cards under the
+  // Following tab. Whoever started last owns the container.
+  let loadSeq = 0;
+
   async function load() {
+    const mine = ++loadSeq;
     clear(results).append(spinner());
     const following = scope === 'following';
     let rows;
@@ -236,9 +242,11 @@ export async function listView() {
         : await api(`/projects?scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
     } catch (e) {
       if (e && e.detail === 'unauthorized') throw e;
+      if (mine !== loadSeq) return;
       clear(results).append(errNode(e));
       return;
     }
+    if (mine !== loadSeq) return;      // a newer tab or search already owns this
     clear(results);
     // Search filters projects; it has no meaning over a person's activity.
     search.classList.toggle('hidden', following);

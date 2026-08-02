@@ -33,6 +33,9 @@ async function openFollowing(page) {
   await page.goto('/#/');
   await page.reload();
   await page.getByRole('button', { name: /^following$/i }).click();
+  // The tab must own what is under it: a slower projects request that started
+  // first must not paint project cards here (caught on production latency).
+  await expect(page.locator('#view a.card[href^="#/projects/"]')).toHaveCount(0);
 }
 
 test.describe('Following people', () => {
@@ -110,8 +113,11 @@ test.describe('Following people', () => {
 
     // Unblocking gives it all back.
     await page.goto(`/#/u/${meId}/followers`);
-    await page.locator('.card.row', { hasText: 'Ben Oduya' })
-      .getByRole('button', { name: /^unblock$/i }).click();
+    const backRow = page.locator('.card.row', { hasText: 'Ben Oduya' });
+    await backRow.getByRole('button', { name: /^unblock$/i }).click();
+    // The button flipping back is the proof the DELETE actually landed — without
+    // it, a failure below is ambiguous between "unblock broke" and "reads broke".
+    await expect(backRow.getByRole('button', { name: /^block$/i })).toBeVisible();
     await openFollowing(ben);
     await expect(ben.locator('.card.activity', { hasText: 'Blocker' }).first()).toBeVisible();
     await expectNoGenericError(ben);
