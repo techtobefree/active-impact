@@ -233,6 +233,37 @@ def announce_activity(actor: dict, kind: str, event_id: int) -> None:
     _pool.submit(work)
 
 
+def send_invite(inviter: dict, invitee_id: int, project: dict) -> None:
+    """Buzz ONE person: somebody invited them to a project (SOCIAL.md §5b).
+
+    Directed rather than fanned out, so it goes to that person's devices only --
+    and still off the request path, still honouring their notify switch.
+    """
+    def work() -> None:
+        try:
+            subs = db.query(
+                "SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps "
+                "JOIN users u ON u.id = ps.user_id "
+                "WHERE ps.user_id = %s AND u.notify_activity = true",
+                (invitee_id,),
+            )
+            if not subs:
+                return
+            payload = {
+                "title": inviter["display_name"],
+                "body": f"invited you to {project['title']}",
+                "url": f"#/projects/{project['id']}",
+            }
+            private_pem, _ = keys()
+            subject = _subject()
+            for sub in subs:
+                _deliver(sub, payload, private_pem, subject)
+        except Exception as e:  # noqa: BLE001 - a push must never break its caller
+            log.warning("invite push failed: %s", e)
+
+    _pool.submit(work)
+
+
 def _subject() -> str:
     """The VAPID `sub` claim: who to contact about this sender. Derived from the
     deployment's own address so it is not another config knob."""

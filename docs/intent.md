@@ -34,3 +34,9 @@ Looks great! Now about the notification system if they install the pwa can we ac
 [answered: yes — Web Push, no APK; iOS requires the PWA be installed to the Home Screen]
 
 yes build it, and handle the iOS install nudge
+
+---
+
+## Wire up invite (2026-08-02, verbatim)
+
+Now I need to wire up the invite button, when we click invite which field to invite other people we follow are people that follow us

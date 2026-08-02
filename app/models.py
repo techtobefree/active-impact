@@ -258,6 +258,27 @@ class Block(Base):
     )
 
 
+class Invite(Base):
+    """"Come to this" — a DIRECTED message, not public activity (SOCIAL.md S13).
+
+    Creates no ``activities`` row and appears in no feed: activity answers "what
+    did this person do", while an invite is addressed to exactly one person.
+    Unique per (project, inviter, invitee), so re-tapping re-notifies nobody --
+    but two different people inviting you is two pieces of news (S16).
+    """
+    __tablename__ = "invites"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    inviter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    invitee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        CheckConstraint("inviter_id <> invitee_id", name="not_self"),
+        UniqueConstraint("project_id", "inviter_id", "invitee_id", name="uq_invites"),
+        Index("idx_invites_invitee", "invitee_id", "id"),
+    )
+
+
 class Activity(Base):
     """An append-only PUBLIC projection of something someone did (SOCIAL.md S2).
 

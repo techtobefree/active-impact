@@ -64,6 +64,8 @@ Project endpoints are project-scoped; per-occurrence actions are event-scoped.
 | `POST /api/projects/{id}/events` | Leader. `{location_text, starts_at, expected_minutes, lat?, lon?}` → **201** **event_detail** for the new occurrence (fresh `checkin_code`, status `open`) | 403 `not_a_leader`; 404; 422 |
 | `POST /api/projects/{id}/leaders` | Leader. `{email}` → **201** leaders list (display names only, never the email) | 403; 404 `user_not_found`; 409 `already_leader` |
 | `DELETE /api/projects/{id}/leaders/{user_id}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
+| `GET /api/projects/{id}/invitable` 📄 | **person_card[]** + `invited` — everyone in my follow graph (both directions) who has not blocked me, alphabetically, each flagged with whether I already invited them here (SOCIAL.md §5b) | 404 |
+| `POST /api/projects/{id}/invite` | `{user_ids: [...]}` → `{invited: n}` — n is how many were actually NEW. Anyone outside my graph, anyone who blocked me, and anyone I already invited is silently skipped: a stale picker must never make the button fail at somebody | 404 |
 | `POST /api/projects/{id}/follow` | Follow the project. Idempotent (`ON CONFLICT (user_id,project_id) DO NOTHING`). → `{is_following: true, follower_count}` | 404 |
 | `DELETE /api/projects/{id}/follow` | Unfollow. Idempotent. **200** (not 204 — the frontend needs the fresh count) → `{is_following: false, follower_count}` | 404 |
 
@@ -194,7 +196,7 @@ Every activity read composes the one visibility clause in `app/activity.py`:
 | `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first. A viewer they blocked gets an empty stream — no error, no banner | 404 |
 | `GET /api/users/{id}/upcoming` | Their **current status**: not-over events they have an RSVP or participation for, soonest first, each `{event_id, project_id, project_title, starts_at, location_text, is_here_now}`. Sits above their history on their page. Same block filter — a blocked viewer gets `[]` | 404 |
 | `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, never my own. Powers home's Following tab | — |
-| `GET /api/notifications` 📄 | `{unread, items: activity_card[]}` — items are the notifiable kinds (`rsvp`, `checked_in`) from my followees; `unread` counts those after my watermark, and is 0 when `notify_activity` is off | — |
+| `GET /api/notifications` 📄 | `{unread, items}` from TWO sources merged newest-first (S14): notifiable activity (`rsvp`, `checked_in`) from my followees, and **invitations addressed to me** (`kind: "invited"`, carrying `project`). `unread` counts both after my watermark, and is 0 when `notify_activity` is off | — |
 | `POST /api/notifications/seen` | Moves the watermark to now → `{unread: 0}`. The items stay readable — seen is not a delete | — |
 
 `GET /api/users/{id}` additionally carries `is_following`, `is_blocked`,

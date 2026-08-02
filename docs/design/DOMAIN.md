@@ -16,6 +16,8 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         ├── push_subscriptions         (one row per DEVICE; Web Push — PUSH.md)
         ├── user_follows               (person -> PERSON; distinct from `follows` below)
         ├── blocks                     (one-way: "they may not see my activity"; keeps the follow)
+        ├── invites                    (DIRECTED "come to this" — notifies one person,
+        │                               never public activity; SOCIAL.md §5b)
         ├── activities                 (append-only PUBLIC projection: logged | rsvp |
         │                               checked_in | created_project | scheduled_event)
         ├── projects (owner) ──┬── project_leaders   (organizers; manage the project + all its events)

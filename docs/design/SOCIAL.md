@@ -148,6 +148,47 @@ photo itself rather than a line about a photo.
 | `#/notifications` | The bell's screen: notifiable activity newest-first, plus the on/off preference. Opening it marks everything seen. |
 | App bar | Gains a **🔔** with an unread dot (polled with the existing version check, not a new timer). |
 
+## 5b. Invites (2026-08-02)
+
+The project page's **Invite** button, wired up. *"Which field to invite other
+people we follow, or people that follow us."*
+
+| # | Decision | Rationale |
+|---|---|---|
+| **S12** | **You may invite exactly the people in your follow graph** — those you follow ∪ those who follow you — and the server enforces it, not just the picker. | It is what was asked, and it is also the anti-abuse boundary: an endpoint that accepts arbitrary user ids is a notification-blast weapon. Your own follow graph is a natural, self-limiting audience. |
+| **S13** | **An invite is directed, so it is NOT public activity.** It creates no `activities` row and appears in nobody's feed — only in the invitee's notifications. | Activity answers "what did this person do"; an invite is a message to one person. Putting it in the public stream would leak who is inviting whom to the whole app. |
+| **S14** | **Notifications become a union of two sources**: activity from people I follow, and invites addressed to me. The watermark still governs unread for both. | An invite is not something a followee did — I may not even follow the inviter — so the derived-from-activity model (S6) cannot carry it alone. One extra source, same watermark, still nothing fanned out or stored twice. |
+| **S15** | **You cannot invite somebody who has blocked you.** | A block means "stop reaching me". An invite is reaching them; honouring the block here costs one clause and would be glaring if it were missing. |
+| **S16** | **Invites are idempotent per (project, inviter, invitee)** and the picker shows who you have already invited. Two *different* people may both invite the same person — that is two pieces of news. | Re-tapping must not re-notify, but a second person's invitation is genuinely new information. |
+| **S17** | **The invite targets the PROJECT**, which is where the button lives, and the notification links there — the project page already leads with its next events. | Inviting to a specific occurrence is a reasonable future refinement; inviting to the *thing* is what the button on the project page means. |
+
+**Schema**
+
+```sql
+CREATE TABLE IF NOT EXISTS invites (
+  id         SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  inviter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_invites_not_self CHECK (inviter_id <> invitee_id),
+  CONSTRAINT uq_invites UNIQUE (project_id, inviter_id, invitee_id)
+);
+CREATE INDEX IF NOT EXISTS idx_invites_invitee ON invites(invitee_id, id DESC);
+```
+
+**API**
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/projects/{id}/invitable` 📄 | **person_card[]** + `invited` — everyone in my follow graph who has not blocked me, each flagged with whether I have already invited them here |
+| `POST /api/projects/{id}/invite` | `{user_ids: [...]}` → `{invited: n}`. Silently skips anyone outside the graph, anyone who blocked me, and anyone already invited by me — an invite button should never error at somebody for a stale list |
+
+**Screen.** Invite opens an inline picker under the button: the people in your
+graph, a filter box once there are more than a handful, and one tap per person
+that flips to **Invited ✓**. The invitee gets it in their notifications and, if
+they have turned their phone on, as a push.
+
 ## 6. Invariants
 
 | # | Invariant |
@@ -161,6 +202,9 @@ photo itself rather than a line about a photo.
 | **S-I7** | `unread` = notifiable activity from my followees, after my watermark, §3-filtered; `POST /notifications/seen` makes it exactly 0. |
 | **S-I8** | No follower/following/activity shape ever exposes an email. |
 | **S-I9** | Organizing (`created_project`, `scheduled_event`) reaches followers' feeds but never the bell — the badge is for people turning up, not for admin. |
+| **S-I11** | An invite reaches only the invitee: it creates no activity row and appears in no feed. |
+| **S-I12** | Only people in my follow graph can be invited, enforced server-side; anyone who blocked me cannot be. |
+| **S-I13** | Re-inviting the same person to the same project changes nothing and re-notifies nobody. |
 | **S-I10** | Back-filled activity carries the timestamp of the thing that actually happened, and re-running the migration adds nothing (every insert is NOT EXISTS-guarded). |
 
 ## 7. Deliberately deferred (with the reasoning, so it can be revisited)

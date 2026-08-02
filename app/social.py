@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response
 
-from app import activity, db, serializers
+from app import activity, db, invites, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 
@@ -261,9 +261,17 @@ def notifications(
     copy of anything.
     """
     rows = activity.following(user["id"], page.limit, page.offset, kinds=activity.NOTIFIABLE)
+    items = activity.cards(rows, user["id"])
+    # Invitations are addressed to me rather than done by somebody I follow, so
+    # they are a second source (S14) -- merged here, newest first, sharing the
+    # one watermark so the badge stays a single honest number.
+    items = sorted(
+        items + invites.for_user(user["id"], page.limit, page.offset),
+        key=lambda i: i["created_at"], reverse=True,
+    )[: page.limit]
     return {
-        "unread": activity.unread_count(user),
-        "items": activity.cards(rows, user["id"]),
+        "unread": activity.unread_count(user) + invites.unread_count(user),
+        "items": items,
     }
 
 

@@ -21,12 +21,14 @@ const VERB = {
   logged: 'logged a service at',
   created_project: 'started',
   scheduled_event: 'scheduled a new event at',
+  invited: 'invited you to',
 };
 const MARK = {
   checked_in: ['green', '📍 here'],
   rsvp: ['muted', '🗓 going'],
   created_project: ['green', '🌱 new'],
   scheduled_event: ['muted', '🗓 added'],
+  invited: ['green', '✉️ invite'],
 };
 
 // One activity -> a card. A `logged` activity IS its record card (the photo is
@@ -38,10 +40,13 @@ export function activityCard(a) {
   const card = el('<article class="card activity"></article>');
   const row = el('<div class="row"></div>');
   row.append(avatarEl(a.actor));
+  // An invite points at the project; everything else at the occurrence.
   const ev = a.event;
-  const what = ev
-    ? `<a href="#/events/${esc(ev.id)}">${esc(ev.project_title)}</a>`
-    : 'a service project';
+  const what = a.project
+    ? `<a href="#/projects/${esc(a.project.id)}">${esc(a.project.title)}</a>`
+    : ev
+      ? `<a href="#/events/${esc(ev.id)}">${esc(ev.project_title)}</a>`
+      : 'a service project';
   const body = el(
     `<div class="grow"><div><a class="record-author" href="#/u/${esc(a.actor.id)}">${esc(a.actor.display_name)}</a> ` +
     `<span class="muted">${esc(VERB[a.kind] || 'did something at')}</span> ${what}</div>` +

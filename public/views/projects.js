@@ -260,6 +260,62 @@ export async function listView() {
   await load();
 }
 
+// The invite picker: everyone you follow or who follows you, each a single tap.
+// A filter appears once the list is long enough to need one.
+function invitePicker(projectId) {
+  const card = el('<div class="card stack"></div>');
+  card.append(el('<div class="section-label" style="margin:0;padding:0;border:none">Invite someone</div>'));
+  const list = el('<div class="stack"></div>');
+  const filter = el('<input type="search" placeholder="Filter people" autocomplete="off" class="hidden">');
+  card.append(filter, list);
+  clear(list).append(spinner());
+
+  api(`/projects/${projectId}/invitable?limit=100`)
+    .then((people) => {
+      if (!card.isConnected) return;
+      clear(list);
+      if (!people.length) {
+        list.append(emptyState('Follow someone (or be followed) and they show up here.'));
+        return;
+      }
+      filter.classList.toggle('hidden', people.length < 8);
+      const rows = people.map((p) => inviteRow(projectId, p));
+      for (const r of rows) list.append(r.node);
+      filter.oninput = () => {
+        const q = filter.value.trim().toLowerCase();
+        for (const r of rows) r.node.classList.toggle('hidden', q && !r.name.includes(q));
+      };
+    })
+    .catch((e) => { if (card.isConnected) clear(list).append(errNode(e)); });
+
+  return card;
+}
+
+// One person: tap once to invite, and the button says so afterwards.
+function inviteRow(projectId, person) {
+  const node = el('<div class="card row"></div>');
+  node.append(avatarEl(person));
+  node.append(el(`<a class="grow record-author" href="#/u/${esc(person.id)}">${esc(person.display_name)}</a>`));
+  const btn = el('<button class="act"></button>');
+  const paint = () => {
+    btn.textContent = person.invited ? '✓ Invited' : 'Invite';
+    btn.classList.toggle('primary', !person.invited);
+    btn.disabled = !!person.invited;      // one invitation per person per project
+  };
+  paint();
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await api(`/projects/${projectId}/invite`, { body: { user_ids: [person.id] } });
+      person.invited = true;
+      paint();
+      toast(`Invited ${person.display_name}`);
+    } catch (e) { btn.disabled = false; toastErr(e); }
+  };
+  node.append(btn);
+  return { node, name: (person.display_name || '').toLowerCase() };
+}
+
 // ---- create -----------------------------------------------------------------
 
 export async function newView() {
@@ -370,11 +426,16 @@ export async function detailView(id) {
   };
   paintFollow();
 
+  // Invite: the people in your follow graph, either direction (SOCIAL.md §5b).
   const inviteBtn = el('<button class="act grow">Invite</button>');
-  inviteBtn.onclick = () => toast('Invites are coming soon.');
+  const inviteSlot = el('<div></div>');
+  inviteBtn.onclick = () => {
+    if (inviteSlot.firstChild) { clear(inviteSlot); return; }   // tap again to close
+    clear(inviteSlot).append(invitePicker(id));
+  };
 
   social.append(shareBtn, followBtn, inviteBtn);
-  root.append(social, followers);
+  root.append(social, followers, inviteSlot);
 
   // Leader: edit the durable project (title / description / waiver).
   if (p.am_leader) {
