@@ -23,7 +23,10 @@
 > where it is ·
 > [SOCIAL.md](./SOCIAL.md) — **person → person**: follow someone, see their
 > activity (logged · RSVP'd · checked in) on their page and in a Following tab,
-> keep a follower list, **block** without losing the follower, and get notified
+> keep a follower list, **block** without losing the follower, and get notified ·
+> [PUSH.md](./PUSH.md) — **notifications on the phone with the app closed**: Web
+> Push, self-minted VAPID keys, and the iOS "must be installed" reality designed
+> for rather than papered over
 >
 > Known gaps live in [`../issues/`](../issues/).
 >

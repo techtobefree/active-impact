@@ -24,3 +24,13 @@ Thank you I looked at what you created online and it looks great I would like to
 ## Connect with others (2026-08-02, verbatim)
 
 Okay now we need the ability to connect with others we can follow them see what they do when they log service or rspvp for an event or sign into an event we'll see that those are the things were allowed to see about them when we go to their page we'll see that and so that will show up also in our feed if people that we follow do things. We have to see a list of our followers on our profile and we have to be able to block them so they can't see what we want what we do they remain our followers and we can unblock them if we choose to. You can click on them to go to there page all it is is a feat of their activity and maybe their information at the top with like things you can do tip them and stuff message them. You can ask to be notified of when your friends are going to RSVP or check into things. We need a notification system.
+
+---
+
+## Notify their phone (2026-08-02, verbatim)
+
+Looks great! Now about the notification system if they install the pwa can we actually make it notify there phone or do they actually have to install an APK for that to work? Like when they don't have it open I mean can we buzz them can we send a notification to their phones OS that's my question?
+
+[answered: yes — Web Push, no APK; iOS requires the PWA be installed to the Home Screen]
+
+yes build it, and handle the iOS install nudge
