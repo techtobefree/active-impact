@@ -50,7 +50,9 @@ test.describe('Peer check-in', () => {
     await expectNoGenericError(page);
     await shot(page, testInfo, 'ana-self-reported');
 
-    // Her personal code for this event — the thing other people scan.
+    // Her personal code for this event — the thing other people scan. Opening it
+    // must SURVIVE the check-in above: a whole-view refresh landing late used to
+    // rebuild the page and close this card again (only visible on real latency).
     await page.getByText(/show my code/i).click();
     await expect(page.getByRole('img', { name: /personal check-in qr/i })).toBeVisible();
     await expect(page.getByText(/print it and pin it up/i)).toBeVisible();

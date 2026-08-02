@@ -619,23 +619,45 @@ export async function eventDetailView(eventId) {
     root.append(cov);
   }
 
+  // The head refreshes IN PLACE after an action, like the feed card and the
+  // project page's event rows already do. A whole-view refresh() here was a real
+  // wart: check in, open "Show my code", and on a slow connection the late
+  // re-render replaced the page and closed it again under your finger.
   const head = el('<section class="card stack"></section>');
-  const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
-  const left = el('<div class="grow" style="min-width:0"></div>');
-  left.append(el(`<h1 class="grow">${esc(project.title)}</h1>`));
-  left.append(eventMeta(ev));
-  top.append(left);
-  const cell = el('<div class="action-cell"></div>');
-  cell.append(el(statusPill(ev.status)));
-  if (ev.my_open_participation) cell.append(attestPill(ev.my_open_participation.attested));
-  cell.append(actionEl(ev, () => { refreshMe(); refresh(); }));
-  top.append(cell);
-  head.append(top);
-  root.append(head);
+  const codeSlot = el('<div></div>');
+  const renderHead = (e) => {
+    clear(head);
+    const top = el('<div class="row" style="align-items:center; gap:.75rem"></div>');
+    const left = el('<div class="grow" style="min-width:0"></div>');
+    left.append(el(`<h1 class="grow">${esc(project.title)}</h1>`));
+    left.append(eventMeta(e));
+    top.append(left);
+    const cell = el('<div class="action-cell"></div>');
+    cell.append(el(statusPill(e.status)));
+    if (e.my_open_participation) cell.append(attestPill(e.my_open_participation.attested));
+    cell.append(actionEl(e, async () => {
+      await refreshMe();
+      const fresh = await api('/events/' + eventId);
+      renderHead(fresh);
+      syncCodeCard(fresh);
+    }));
+    top.append(cell);
+    head.append(top);
+  };
 
   // My personal code for this event — the thing OTHER people scan to check in
-  // (CHECKIN_PROOF.md §5.2). Any attendee, not just leaders.
-  if (ev.my_rsvp || ev.my_open_participation) root.append(myCodeCard(eventId));
+  // (CHECKIN_PROOF.md §5.2). Any attendee, not just leaders. It appears the
+  // moment you become one, and is never rebuilt once shown: rebuilding it would
+  // close a card somebody is holding up to a camera.
+  const syncCodeCard = (e) => {
+    const attending = !!(e.my_rsvp || e.my_open_participation);
+    if (attending && !codeSlot.firstChild) codeSlot.append(myCodeCard(eventId));
+    else if (!attending) clear(codeSlot);
+  };
+
+  renderHead(ev);
+  syncCodeCard(ev);
+  root.append(head, codeSlot);
 
   // Event photos: leaders can add/remove/set the event cover right here.
   if (ev.am_leader) {

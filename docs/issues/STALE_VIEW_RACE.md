@@ -109,9 +109,19 @@ const rows = await fetchIt();
 if (mine !== loadSeq) return;   // a newer tab or keystroke already owns this
 ```
 
+**A sixth, from a blunt refresh (2026-08-02).** The event page answered an action
+with `refresh()` — a whole-view re-render, fire-and-forget. Check in, then open
+"Show my code", and on a slow connection the late re-render replaced the page and
+closed the card under your finger. It now refreshes its head IN PLACE, the way the
+feed card and the project page's event rows already did, and the personal-QR card
+is never rebuilt once shown — rebuilding it would close something somebody is
+holding up to a camera.
+
 **The generalization worth remembering: any handler that awaits and then writes to
-a shared node needs either a sequence guard or a queue.** The router got the
-queue; in-view loaders get the guard.
+a shared node needs either a sequence guard or a queue — and answering an action
+with a whole-view `refresh()` is the bluntest version of the same mistake.** The
+router got the queue; in-view loaders get the guard; actions should re-render the
+smallest thing that changed.
 
 ## Residual limitation
 
