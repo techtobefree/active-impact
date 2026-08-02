@@ -176,6 +176,29 @@ delete; no admin UI yet (unhide is a manual DB flag). The 10 MB image cap, the
 content-type allowlist, the caption cap, and the per-hour rate limit are the spam
 floor.
 
+## Social — `app/social.py`
+
+Person -> person (SOCIAL.md). Following decides whose activity reaches my feed
+and my bell; **blocking is a one-way visibility mute that keeps the follow**.
+Every activity read composes the one visibility clause in `app/activity.py`:
+*someone I have blocked never sees my activity*.
+
+| Endpoint | Notes | Errors |
+|---|---|---|
+| `POST /api/users/{id}/follow` | Idempotent → `{is_following: true, follower_count}` | 404; 409 `cannot_follow_self` |
+| `DELETE /api/users/{id}/follow` | Idempotent → `{is_following: false, follower_count}` | 404 |
+| `GET /api/users/{id}/followers` 📄 | **person_card[]**, newest first | 404 |
+| `GET /api/users/{id}/following` 📄 | **person_card[]** | 404 |
+| `POST /api/users/{id}/block` | Mine only, idempotent → `{is_blocked: true}`. **Never touches `user_follows`** — they stay a follower (S4) | 404; 409 `cannot_block_self` |
+| `DELETE /api/users/{id}/block` | Idempotent → `{is_blocked: false}`. Restores everything, because blocking only ever filtered reads | 404 |
+| `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first. A viewer they blocked gets an empty stream — no error, no banner | 404 |
+| `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, never my own. Powers home's Following tab | — |
+| `GET /api/notifications` 📄 | `{unread, items: activity_card[]}` — items are the notifiable kinds (`rsvp`, `checked_in`) from my followees; `unread` counts those after my watermark, and is 0 when `notify_activity` is off | — |
+| `POST /api/notifications/seen` | Moves the watermark to now → `{unread: 0}`. The items stay readable — seen is not a delete | — |
+
+`GET /api/users/{id}` additionally carries `is_following`, `is_blocked`,
+`follower_count`, `following_count`; `PATCH /api/me` accepts `notify_activity`.
+
 ## Locations — `app/locations.py`
 
 The address book the app builds itself (LOCATIONS.md). Every `location_text` sent

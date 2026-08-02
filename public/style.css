@@ -53,6 +53,21 @@ img { max-width: 100%; }
   color: var(--green); border-radius: 10px;
 }
 #topbar .icon-btn:active { background: color-mix(in srgb, var(--green) 14%, transparent); }
+/* The bell, with an unread dot drawn from its data-count (SOCIAL.md S6). */
+#topbar .bell { position: relative; font-size: 1.15rem; text-decoration: none; }
+#topbar .bell.has-unread::after {
+  content: attr(data-count); position: absolute; top: 2px; right: 2px;
+  min-width: 16px; padding: 0 3px; border-radius: 999px;
+  background: var(--red); color: #fff; font-size: .65rem; font-weight: 700;
+  line-height: 16px; text-align: center;
+}
+/* Four tabs on a 390px phone: trim the horizontal padding rather than let the
+   labels collide, and let each shrink evenly. */
+.tabs .act { padding-left: .35rem; padding-right: .35rem; font-size: .92rem; min-width: 0; }
+
+/* An activity card is a line, not a photo — it must not shout over the feed. */
+.card.activity { padding-top: .7rem; padding-bottom: .7rem; }
+.card.activity .row { align-items: center; }
 
 /* ---- layout ---- */
 main { max-width: 640px; margin: 0 auto; padding: 1rem; }

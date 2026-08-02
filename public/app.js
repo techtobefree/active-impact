@@ -6,6 +6,7 @@ import * as checkin from './views/checkin.js';
 import * as catalog from './views/catalog.js';
 import * as wallet from './views/wallet.js';
 import * as profile from './views/profile.js';
+import * as social from './views/social.js';
 import { api, getToken, currentUser, setSession, stashReturn } from './api.js';
 import { el, mount, errMessage } from './ui.js';
 
@@ -45,7 +46,23 @@ const routes = [
   [/^#\/wallet$/, wallet.walletView],
   [/^#\/me$/, profile.meView],
   [/^#\/u\/(\d+)$/, profile.userView],
+  // The social layer (SOCIAL.md §5): who follows whom, and the bell's screen.
+  [/^#\/u\/(\d+)\/followers$/, social.followersView],
+  [/^#\/u\/(\d+)\/following$/, social.followingView],
+  [/^#\/notifications$/, social.notificationsView],
 ];
+
+// The bell's unread dot. Derived server-side from my watermark (SOCIAL.md S6),
+// so there is nothing to keep in sync here — just ask, and paint.
+export async function refreshUnread() {
+  const bell = document.getElementById('bell');
+  if (!bell || !getToken()) return;
+  try {
+    const { unread } = await api('/notifications?limit=1');
+    bell.classList.toggle('has-unread', unread > 0);
+    bell.dataset.count = unread > 99 ? '99+' : String(unread || '');
+  } catch { /* offline — leave the dot as it was */ }
+}
 
 export function updateBalance(me) {
   const b = document.getElementById('balance');
@@ -191,6 +208,7 @@ export function render() {
   // the queue behind a slow fetch.
   window.scrollTo(0, 0);
   updateChrome(hash);
+  refreshUnread();
   const groups = hash.match(re).slice(1);
   queue = queue.then(() => runView(view, groups), () => runView(view, groups));
   return queue;
@@ -224,8 +242,10 @@ async function checkVersion() {
     }
   } catch { /* offline — ignore */ }
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) checkVersion(); });
-setInterval(checkVersion, 20_000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { checkVersion(); refreshUnread(); }
+});
+setInterval(() => { checkVersion(); refreshUnread(); }, 20_000);
 
 window.addEventListener('hashchange', render);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

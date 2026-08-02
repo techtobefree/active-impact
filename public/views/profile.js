@@ -1,15 +1,25 @@
 // Profile views: public profile (#/u/:id) + my profile/edit (#/me).
 import { api, currentUser, getToken, setSession, clearSession, clearReturn } from '../api.js';
 import {
-  el, esc, mount, addForm, avatarEl, spinner, toast,
+  el, esc, mount, addForm, avatarEl, spinner, toast, toastErr,
   fmtDate, emptyState, errMessage, isStandalone, doInstall,
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
 import { convertForm } from './auth.js';
 import { myRecords } from './records.js';
+import { activityFeed } from './social.js';
 
 // "My log" — everything I've logged, including the entries that matched no event
 // and therefore live only here (FEED.md F7).
+// Followers / Following for me — the founder's "a list of our followers on our
+// profile", and the way to reach the Block control.
+function socialSection(me) {
+  const card = el('<div class="card row"></div>');
+  card.append(el(`<a class="grow" href="#/u/${esc(me.id)}/followers">👥 Followers</a>`));
+  card.append(el(`<a href="#/u/${esc(me.id)}/following">Following</a>`));
+  return card;
+}
+
 function myLogSection() {
   const wrap = el('<div class="stack"></div>');
   wrap.append(el('<div class="section-label">My log</div>'));
@@ -50,9 +60,47 @@ export async function userView(id) {
     `🪙 ${esc(user.tokens_earned)} earned · 📋 ${esc(user.projects_joined)} projects</div>`,
   ));
 
-  if (!isMe) card.append(tipSection(user));
+  // Follower / following counts, tappable through to the lists.
+  card.append(el(
+    `<div class="row wrap"><a class="muted" href="#/u/${esc(user.id)}/followers">` +
+    `<strong>${esc(user.follower_count)}</strong> followers</a>` +
+    `<a class="muted" href="#/u/${esc(user.id)}/following">` +
+    `<strong>${esc(user.following_count)}</strong> following</a></div>`,
+  ));
 
-  mount(card);
+  const root = el('<div class="stack"></div>');
+  root.append(card);
+  if (!isMe) root.append(followButton(user), tipSection(user));
+
+  // …and then the thing their page actually IS: what they have been doing.
+  root.append(el('<div class="section-label">Activity</div>'));
+  root.append(activityFeed(`/users/${encodeURIComponent(user.id)}/activity`, {
+    empty: isMe ? "You haven't logged, RSVP'd or checked in yet."
+      : `Nothing from ${user.display_name} yet.`,
+  }));
+  mount(root);
+}
+
+// Follow / Following, repainting in place. Following someone is what puts their
+// activity in my feed and my notifications — nothing else.
+function followButton(user) {
+  const btn = el('<button class="act block"></button>');
+  const paint = () => {
+    btn.textContent = user.is_following ? '✓ Following' : 'Follow';
+    btn.classList.toggle('primary', !!user.is_following);
+  };
+  paint();
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await api(`/users/${user.id}/follow`, { method: user.is_following ? 'DELETE' : 'POST' });
+      user.is_following = r.is_following;
+      user.follower_count = r.follower_count;
+      paint();
+    } catch (e) { toastErr(e); }
+    finally { btn.disabled = false; }
+  };
+  return btn;
 }
 
 // A "Tip" button that reveals an inline tip form for `user`.
@@ -154,7 +202,7 @@ function guestMe(me) {
   save.append(convertForm({ onSuccess: () => { toast('Account saved 🎉'); refresh(); } }));
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, save, appearanceCard(), myLogSection());
+  root.append(summary, socialSection(me), save, appearanceCard(), myLogSection());
   mount(root);
 }
 
@@ -206,6 +254,6 @@ function realMe(me) {
   actions.append(out);
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, editCard, actions, myLogSection());
+  root.append(summary, socialSection(me), editCard, actions, myLogSection());
   mount(root);
 }

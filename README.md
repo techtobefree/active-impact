@@ -38,7 +38,7 @@ python scripts/seed.py                # optional demo data (users ana/ben/mia, p
 ```bash
 . .venv/bin/activate
 docker compose up -d postgres
-python -m pytest -q                   # 321 tests: auth, ledger invariants, event matching, locations, all domains
+python -m pytest -q                   # 349 tests: auth, ledger invariants, event matching, locations, social, all domains
 python scripts/smoke.py http://localhost:8000   # end-to-end happy-path probe (real HTTP)
 ```
 
@@ -90,6 +90,7 @@ docs/       intent + the design tree (start at docs/design/OVERVIEW.md)
 | [`docs/design/CHECKIN_PROOF.md`](docs/design/CHECKIN_PROOF.md) | Asserted vs **attested** presence: the personal QR, peer check-in, threat model |
 | [`docs/design/FEED.md`](docs/design/FEED.md) | **One feed**: a logged service belongs to an event, and the home screen is the projects feed carrying each event's latest photos |
 | [`docs/design/LOCATIONS.md`](docs/design/LOCATIONS.md) | The address book the app builds itself — every address typed becomes a location, suggested next time, remembering where it is |
+| [`docs/design/SOCIAL.md`](docs/design/SOCIAL.md) | Following people, their activity, blocking that keeps the follower, and notifications derived from a watermark |
 | [`docs/issues/`](docs/issues/) | Known gaps found along the way |
 
 Impact tokens are internal points with no monetary value — a way to recognize

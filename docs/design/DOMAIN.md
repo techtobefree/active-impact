@@ -13,6 +13,9 @@
 
 ```
 users ──┬── sessions                    (opaque bearer tokens, 30-day expiry)
+        ├── user_follows               (person -> PERSON; distinct from `follows` below)
+        ├── blocks                     (one-way: "they may not see my activity"; keeps the follow)
+        ├── activities                 (append-only PUBLIC projection: logged | rsvp | checked_in)
         ├── projects (owner) ──┬── project_leaders   (organizers; manage the project + all its events)
         │                      ├── waivers           (versioned, immutable text; project-scoped)
         │                      ├── follows           (interest / bookmark; drives follower_count)
@@ -127,6 +130,8 @@ CREATE TABLE IF NOT EXISTS users (
   bio           TEXT NOT NULL DEFAULT '',
   balance       INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),  -- cached ledger sum
   qr_token      TEXT NOT NULL UNIQUE,          -- secrets.token_urlsafe(8); my permanent opaque handle, the thing my personal QR carries (CHECKIN_PROOF.md §3)
+  notifications_seen_at TIMESTAMPTZ,           -- the watermark notifications are DERIVED from (SOCIAL.md S6)
+  notify_activity BOOLEAN NOT NULL DEFAULT true,  -- "tell me when people I follow RSVP or check in"
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -266,6 +271,47 @@ CREATE TABLE IF NOT EXISTS attestations (
 );
 CREATE INDEX IF NOT EXISTS idx_attestations_event   ON attestations(event_id);
 CREATE INDEX IF NOT EXISTS idx_attestations_subject ON attestations(subject_user_id);
+
+-- ---- social (SOCIAL.md) -----------------------------------------------------
+-- Person -> person. `follows` (below) is person -> PROJECT: same word, different
+-- object, deliberately different tables.
+CREATE TABLE IF NOT EXISTS user_follows (
+  id          SERIAL PRIMARY KEY,
+  follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_user_follows_not_self CHECK (follower_id <> followee_id),
+  CONSTRAINT uq_user_follows UNIQUE (follower_id, followee_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_follows_followee ON user_follows(followee_id);
+
+-- "This person may not see my activity" (S4). Never touches user_follows: a
+-- blocked person REMAINS a follower and can be unblocked.
+CREATE TABLE IF NOT EXISTS blocks (
+  id         SERIAL PRIMARY KEY,
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ck_blocks_not_self CHECK (blocker_id <> blocked_id),
+  CONSTRAINT uq_blocks UNIQUE (blocker_id, blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
+
+-- APPEND-ONLY public projection of what someone did, written in the SAME tx as
+-- the action (S2). Kept separate from audit_log on purpose (S3): an audit row is
+-- a reporting record, an activity row is public and CASCADEs with its subject so
+-- a feed never points at something that is gone.
+CREATE TABLE IF NOT EXISTS activities (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in')),
+  event_id   BIGINT  REFERENCES events(id) ON DELETE CASCADE,
+  project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+  record_id  BIGINT  REFERENCES service_records(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_activities_user    ON activities(user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_activities_created ON activities(created_at DESC);
 
 -- ---- locations (LOCATIONS.md) -----------------------------------------------
 -- The address book the app builds itself: every address typed on an event upserts
@@ -513,6 +559,7 @@ volunteers (flat rate is intent).
 | I13 | An `attestations` row always names two **different** users (CHECK) and is unique per (event, scanner, subject) — a repeat scan is a no-op, never an error |
 | I14 | A scan never creates a participation for the **subject**; the scanner's participation always carries a `waiver_id` from the event's project (I6 holds for every row, however created) |
 | I15 | `participations.attested` is true ⟺ an attestation for that (event, user) existed at or before the participation was written — set at insert, and flipped by a later scan only on a participation that is still open |
+| S-I1…S-I8 | The social invariants — nobody follows or blocks themselves, blocking keeps the follower, a blocked viewer sees no activity anywhere, and unread is exactly the notifiable activity after my watermark. Stated and tested in [SOCIAL.md § 6](./SOCIAL.md#6-invariants) |
 | L-I1…L-I6 | The location invariants — one row per normalized address, coordinates that flow both ways and are never overwritten, prefix-first suggestions that never expose a position. Stated and tested in [LOCATIONS.md § 6](./LOCATIONS.md#6-invariants) |
 | F-I1…F-I9 | The one-feed invariants — event matching, the ≤2 records per card, and "coordinates are never served". Stated and tested in [FEED.md § 9](./FEED.md#9-invariants-the-test-suite-asserts-these) |
 
@@ -556,7 +603,12 @@ volunteers (flat rate is intent).
   `lat`/`lon`/`match_reason` are **never** exposed at all (FEED.md F6).
   `cheer_count` + `i_cheered` are **batched by record id** in the feed (no N+1),
   like `event_card`.
+- **activity_card** (SOCIAL.md): `id, kind` (`logged|rsvp|checked_in`)`, actor
+  {id, display_name, is_guest}, created_at, event | null, record: record_card |
+  null` — the `event` shape is the one record_card already carries.
+- **person_card** (SOCIAL.md): `id, display_name, is_guest, is_following,
+  is_blocked` — my relationship to them. Never an email.
 - **me** (`GET /api/me`, the private self view): `id, email, display_name, bio,
-  balance, created_at, is_guest`. The **only** shape carrying the email (and
+  balance, created_at, is_guest, notify_activity`. The **only** shape carrying the email (and
   balance). `is_guest` = `email IS NULL`; a guest's `email` serializes as JSON
   `null`, never the string `"None"`.

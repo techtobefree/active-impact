@@ -9,6 +9,7 @@ import {
   toast, toastErr, errMessage, fmtDateTime, fmtDuration, imagesStrip, locationControl,
 } from '../ui.js';
 import { recordStrip, recordFeed } from './records.js';
+import { activityCard } from './social.js';
 import { scanQR, parseScan } from '../scan.js';
 import { refresh, refreshMe } from '../app.js';
 
@@ -194,9 +195,11 @@ export async function listView() {
 
   const results = el('<div class="stack"></div>');
 
-  const tabs = el('<div class="row" style="gap:.4rem"></div>');
+  const tabs = el('<div class="row tabs" style="gap:.4rem"></div>');
   const tabBtns = {};
-  for (const [key, txt] of [['upcoming', 'Upcoming'], ['past', 'Past'], ['mine', 'Mine']]) {
+  // Following sits INSIDE the one feed (SOCIAL.md S9) rather than mixing activity
+  // into the project cards — same screen, same scroll, different card shape.
+  for (const [key, txt] of [['upcoming', 'Upcoming'], ['following', 'Following'], ['past', 'Past'], ['mine', 'Mine']]) {
     const b = el(`<button class="act grow">${txt}</button>`);
     b.onclick = () => { if (scope === key) return; scope = key; setActive(); load(); };
     tabBtns[key] = b;
@@ -219,21 +222,28 @@ export async function listView() {
   const emptyMsg = () => scope === 'mine'
     ? "You haven't joined or led any projects yet."
     : scope === 'past' ? 'No past projects yet.'
-    : 'No projects yet. Post the first one.';
+    : scope === 'following'
+      ? "Nothing yet. Open somebody's profile and follow them to see what they do."
+      : 'No projects yet. Post the first one.';
 
   async function load() {
     clear(results).append(spinner());
+    const following = scope === 'following';
     let rows;
     try {
-      rows = await api(`/projects?scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+      rows = following
+        ? await api('/feed/following?limit=30')
+        : await api(`/projects?scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
     } catch (e) {
       if (e && e.detail === 'unauthorized') throw e;
       clear(results).append(errNode(e));
       return;
     }
     clear(results);
+    // Search filters projects; it has no meaning over a person's activity.
+    search.classList.toggle('hidden', following);
     if (!rows.length) { results.append(emptyState(emptyMsg())); return; }
-    for (const p of rows) results.append(projectCard(p));
+    for (const row of rows) results.append(following ? activityCard(row) : projectCard(row));
   }
 
   const root = el('<div class="stack"></div>');
