@@ -23,7 +23,7 @@ from pydantic import BaseModel, field_validator
 
 from datetime import datetime
 
-from app import audit, db, locations, matching, serializers
+from app import activity, audit, db, locations, matching, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.projects import current_waiver, is_leader, new_code
@@ -231,11 +231,15 @@ def rsvp(event_id: int, user: dict = Depends(current_user)):
     if ev["is_over"]:
         raise api_error(409, "event_over")
     with db.tx() as c:
-        c.execute(
+        row = c.execute(
             "INSERT INTO rsvps(event_id, user_id) VALUES (%s, %s) "
-            "ON CONFLICT (event_id, user_id) DO NOTHING",
+            "ON CONFLICT (event_id, user_id) DO NOTHING RETURNING id",
             (event_id, user["id"]),
-        )
+        ).fetchone()
+        # Only a NEW rsvp is news: re-tapping an idempotent endpoint must not
+        # re-announce it to everyone's feed.
+        if row:
+            activity.record(c, "rsvp", user["id"], event_id=event_id)
     return _event_response(event_id, user["id"])
 
 
@@ -272,6 +276,7 @@ def self_checkin(event_id: int, user: dict = Depends(current_user)):
                 c, "check_in", actor_user_id=user["id"], subject_user_id=user["id"],
                 project_id=pid, event_id=event_id, participation_id=part["id"],
             )
+            activity.record(c, "checked_in", user["id"], event_id=event_id, project_id=pid)
     except psycopg.errors.UniqueViolation:
         raise api_error(409, "already_checked_in")
     return _event_response(event_id, user["id"])

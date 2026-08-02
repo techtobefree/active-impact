@@ -30,6 +30,9 @@ def me_shape(row: dict) -> dict:
     """
     shape = {k: row[k] for k in ("id", "email", "display_name", "bio", "balance", "created_at")}
     shape["is_guest"] = row["email"] is None
+    # Whether the bell counts anything (SOCIAL.md S7). Private view only -- how I
+    # want to be nudged is nobody else's business.
+    shape["notify_activity"] = bool(row["notify_activity"])
     # My personal QR handle. PRIVATE view only -- a code is handed out by its
     # owner (they show it), never scraped off a public profile (CHECKIN_PROOF.md §3).
     shape["qr_token"] = row["qr_token"]

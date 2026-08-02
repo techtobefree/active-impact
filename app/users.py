@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_validator
 
-from app import db
+from app import db, social
 from app.auth import current_user
 from app.deps import api_error
 from app.serializers import me_shape, user_public
@@ -21,6 +21,7 @@ router = APIRouter()
 class MeUpdate(BaseModel):
     display_name: str | None = None
     bio: str | None = None
+    notify_activity: bool | None = None  # the bell's on/off switch (SOCIAL.md S7)
 
     @field_validator("display_name")
     @classmethod
@@ -69,9 +70,19 @@ def update_me(body: MeUpdate, user: dict = Depends(current_user)):
 
 
 @router.get("/users/{user_id}")
-def get_user(user_id: int, _user: dict = Depends(current_user)):
-    """Public profile + stats for a user, by integer id."""
+def get_user(user_id: int, user: dict = Depends(current_user)):
+    """Public profile + stats + MY relationship to them (SOCIAL.md §4).
+
+    The social state is assembled here rather than inside ``user_public`` so the
+    serializers stay a leaf module -- they are imported by app/activity.py, which
+    app/social.py imports in turn.
+    """
     row = db.query_one("SELECT * FROM users WHERE id = %s", (user_id,))
     if not row:
         raise api_error(404, "not_found")
-    return user_public(row)
+    shape = user_public(row)
+    shape["is_following"] = social.is_following(user["id"], user_id)
+    shape["is_blocked"] = social.is_blocked(user["id"], user_id)
+    shape["follower_count"] = social.follower_count(user_id)
+    shape["following_count"] = social.following_count(user_id)
+    return shape

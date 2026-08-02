@@ -27,7 +27,7 @@ import qrcode
 import qrcode.image.svg
 from fastapi import APIRouter, Depends, Request, Response
 
-from app import audit, db, serializers
+from app import activity, audit, db, serializers
 from app.auth import current_user
 from app.deps import api_error
 from app.projects import current_waiver
@@ -228,6 +228,10 @@ def confirm(qr_token: str, event_id: int, user: dict = Depends(current_user)):
                 project_id=pid, event_id=event_id, participation_id=row["id"],
                 meta={"via": "scan", "attested_by": subject},
             )
+            # Only the SCANNER checked in here. The subject agreed to nothing on
+            # their own device (I14), so announcing them would be putting words in
+            # their mouth — their participation is only ever upgraded, never made.
+            activity.record(c, "checked_in", me, event_id=event_id, project_id=pid)
         # 4. The SUBJECT is present, but has agreed to nothing here — only ever
         #    upgrade an existing participation, never create one (I14).
         _mark_open_attested(c, event_id, subject)

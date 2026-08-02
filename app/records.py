@@ -18,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, field_validator
 
-from app import db, matching, serializers
+from app import activity, db, matching, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.images import decode_image_payload
@@ -150,6 +150,8 @@ def create_record(body: RecordCreate, user: dict = Depends(current_user)):
         # A record that found its event by other means also geolocates it, once.
         if event_id is not None and reason != "nearby":
             matching.bootstrap_coords(c, event_id, body.lat, body.lon)
+        # …and it is something my followers should see (SOCIAL.md S2).
+        activity.record(c, "logged", uid, event_id=event_id, record_id=rec["id"])
 
     cheer = {"cheer_count": 0, "i_cheered": False}
     event = serializers.record_event_maps([event_id]).get(event_id)

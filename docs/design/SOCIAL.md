@@ -110,9 +110,11 @@ The viewer always sees **their own** activity (you cannot block yourself — CHE
 | `GET /api/users/{id}` | Gains `is_following`, `follower_count`, `following_count`, `is_blocked` |
 
 **activity_card**: `{id, kind, actor {id, display_name, is_guest}, created_at,
-event {id, project_id, project_title, starts_at, location_text} | null,
-record: record_card | null}`. A `logged` activity embeds the full record card, so
-the Following feed shows the photo itself rather than a line about a photo.
+event {id, project_id, project_title, starts_at} | null, record: record_card |
+null}` — the `event` shape is exactly the one a record_card already carries, so
+there is one embedded-event shape in the codebase rather than two that drift. A
+`logged` activity embeds the full record card, so the Following feed shows the
+photo itself rather than a line about a photo.
 
 **person_card** never carries an email (D3), like every other public shape.
 

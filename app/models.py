@@ -66,6 +66,11 @@ class User(Base):
     # the row (guest or real) and never reissued; it survives a guest ATTACH (same
     # row gains credentials) and dies with the guest row on a MERGE.
     qr_token: Mapped[str] = mapped_column(Text, nullable=False, unique=True)  # secrets.token_urlsafe(8)
+    # Notifications are DERIVED from this watermark (SOCIAL.md S6): unread =
+    # notifiable activity from my followees after it. No fan-out table exists, so
+    # the badge can never disagree with the list it opens.
+    notifications_seen_at: Mapped[datetime | None] = mapped_column(TS)
+    notify_activity: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
@@ -178,6 +183,68 @@ class Rsvp(Base):
     __table_args__ = (
         UniqueConstraint("event_id", "user_id", name="event_user"),
         Index("idx_rsvps_user", "user_id"),
+    )
+
+
+class UserFollow(Base):
+    """Person -> person (SOCIAL.md S1). Deliberately NOT the project ``follows``
+    table wearing a second hat: same English word, different object, and every
+    query that touched either would have to disambiguate forever.
+
+    Carries no powers -- it decides whose activity reaches my Following feed and
+    my notifications, nothing else.
+    """
+    __tablename__ = "user_follows"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    follower_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    followee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        CheckConstraint("follower_id <> followee_id", name="not_self"),
+        UniqueConstraint("follower_id", "followee_id", name="uq_user_follows"),
+        Index("idx_user_follows_followee", "followee_id"),
+    )
+
+
+class Block(Base):
+    """"This person may not see my activity" (SOCIAL.md S4).
+
+    A one-way visibility mute that deliberately LEAVES the follow in place: the
+    founder's ask was that a blocked person stays a follower and can be unblocked.
+    Nothing here ever writes user_follows.
+    """
+    __tablename__ = "blocks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    blocker_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # me
+    blocked_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # them
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        CheckConstraint("blocker_id <> blocked_id", name="not_self"),
+        UniqueConstraint("blocker_id", "blocked_id", name="uq_blocks"),
+        Index("idx_blocks_blocked", "blocked_id"),
+    )
+
+
+class Activity(Base):
+    """An append-only PUBLIC projection of something someone did (SOCIAL.md S2).
+
+    Written in the same tx as the action, exactly like audit_log -- but kept
+    separate from it on purpose (S3): an audit row is a reporting record and must
+    never be reshaped for display, while an activity row is public and is DELETED
+    with its subject, so a feed never points at something that is gone.
+    """
+    __tablename__ = "activities"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # logged | rsvp | checked_in
+    event_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"))
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    record_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_records.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (
+        CheckConstraint("kind IN ('logged', 'rsvp', 'checked_in')", name="kind_valid"),
+        Index("idx_activities_user", "user_id", "id"),
+        Index("idx_activities_created", "created_at"),
     )
 
 
