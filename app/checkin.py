@@ -20,7 +20,7 @@ from __future__ import annotations
 import psycopg
 from fastapi import APIRouter, Depends
 
-from app import activity, audit, db, serializers
+from app import activity, audit, db, push, serializers
 from app.auth import current_user
 from app.deps import api_error
 from app.projects import current_waiver, is_leader
@@ -116,6 +116,7 @@ def agree(code: str, user: dict = Depends(current_user)):
             activity.record(c, "checked_in", user["id"], event_id=event["id"], project_id=pid)
     except psycopg.errors.UniqueViolation:
         raise api_error(409, "already_checked_in")
+    push.announce_activity(user, "checked_in", event["id"])
     return row
 
 

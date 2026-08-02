@@ -47,7 +47,7 @@ from app.main import app  # noqa: E402
 # append-only log; events is the new occurrence table (participations/rsvps hang
 # off it); follows stays project-scoped.
 _TABLES = [
-    "activities", "blocks", "user_follows",
+    "push_subscriptions", "activities", "blocks", "user_follows",
     "cheers", "reports", "service_records",
     "locations",
     "audit_log", "token_entries", "catalog_claims", "catalog_items", "participations",

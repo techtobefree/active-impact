@@ -23,7 +23,7 @@ from pydantic import BaseModel, field_validator
 
 from datetime import datetime
 
-from app import activity, audit, db, locations, matching, serializers
+from app import activity, audit, db, locations, matching, push, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 from app.projects import current_waiver, is_leader, new_code
@@ -240,6 +240,8 @@ def rsvp(event_id: int, user: dict = Depends(current_user)):
         # re-announce it to everyone's feed.
         if row:
             activity.record(c, "rsvp", user["id"], event_id=event_id)
+    if row:
+        push.announce_activity(user, "rsvp", event_id)   # after the commit (P5)
     return _event_response(event_id, user["id"])
 
 
@@ -279,6 +281,7 @@ def self_checkin(event_id: int, user: dict = Depends(current_user)):
             activity.record(c, "checked_in", user["id"], event_id=event_id, project_id=pid)
     except psycopg.errors.UniqueViolation:
         raise api_error(409, "already_checked_in")
+    push.announce_activity(user, "checked_in", event_id)
     return _event_response(event_id, user["id"])
 
 

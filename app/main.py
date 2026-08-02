@@ -27,6 +27,7 @@ from app.images import router as images_router
 from app.records import router as records_router
 from app.locations import router as locations_router
 from app.social import router as social_router
+from app.push import router as push_router
 
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 
@@ -91,6 +92,7 @@ api.include_router(images_router)
 api.include_router(records_router)
 api.include_router(locations_router)
 api.include_router(social_router)
+api.include_router(push_router)
 
 app.include_router(api)
 

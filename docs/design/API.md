@@ -200,6 +200,23 @@ Every activity read composes the one visibility clause in `app/activity.py`:
 `GET /api/users/{id}` additionally carries `is_following`, `is_blocked`,
 `follower_count`, `following_count`; `PATCH /api/me` accepts `notify_activity`.
 
+## Push — `app/push.py`
+
+Web Push (PUSH.md): notifications on the phone with the app closed. No config —
+the VAPID pair is minted on first use and kept in `app_keys`. Recipients are
+**exactly** the bell's (`SOCIAL.md` S6/S7), and sending happens off the request
+path, so a push can neither slow down nor roll back the action it announces.
+
+| Endpoint | Notes |
+|---|---|
+| `GET /api/push/key` | `{public_key}` — the application server key a browser needs to subscribe. Stable forever; regenerating would mute every existing device |
+| `POST /api/push/subscribe` | `{endpoint, p256dh, auth}` → **201** `{subscribed: true}`. Idempotent on the endpoint, which IS the device — re-subscribing moves it to the current user |
+| `POST /api/push/unsubscribe` | `{endpoint}` → `{subscribed: false}`. Idempotent, and only ever removes *my* device |
+| `GET /api/push/status?endpoint=` | `{subscribed}` — the browser knows it holds a subscription; only the server knows whether we still do |
+
+A subscription rejected as gone (404/410) is deleted on the spot: self-healing,
+no cron.
+
 ## Locations — `app/locations.py`
 
 The address book the app builds itself (LOCATIONS.md). Every `location_text` sent

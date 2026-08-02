@@ -20,6 +20,7 @@ public/
 ├── views/projects.js       # projects list (#/projects), project detail (+ its events), create, event detail, per-event lead hub (QR + roster)
 ├── views/checkin.js        # the #/c/{code} landing (event code) AND the #/s/{token}/{event} landing (peer scan)
 ├── scan.js                 # in-app QR scanner: BarcodeDetector + getUserMedia overlay, graceful "unavailable"
+├── push.js                 # Web Push: which of the five states this device is in, subscribe/unsubscribe (PUSH.md)
 ├── views/catalog.js        # list (offers|needs tabs), detail, create/edit, claims
 ├── views/wallet.js         # balance, ledger, my claims (both roles), tip form
 ├── views/profile.js        # public profile, my profile edit

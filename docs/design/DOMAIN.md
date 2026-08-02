@@ -13,6 +13,7 @@
 
 ```
 users ──┬── sessions                    (opaque bearer tokens, 30-day expiry)
+        ├── push_subscriptions         (one row per DEVICE; Web Push — PUSH.md)
         ├── user_follows               (person -> PERSON; distinct from `follows` below)
         ├── blocks                     (one-way: "they may not see my activity"; keeps the follow)
         ├── activities                 (append-only PUBLIC projection: logged | rsvp |
@@ -272,6 +273,29 @@ CREATE TABLE IF NOT EXISTS attestations (
 );
 CREATE INDEX IF NOT EXISTS idx_attestations_event   ON attestations(event_id);
 CREATE INDEX IF NOT EXISTS idx_attestations_subject ON attestations(subject_user_id);
+
+-- ---- push (PUSH.md) ---------------------------------------------------------
+-- Keys the app mints for ITSELF (as opposed to config, which is env). Today the
+-- VAPID pair, which must stay stable: every subscription a browser holds is
+-- bound to it, so regenerating would silently mute every device.
+CREATE TABLE IF NOT EXISTS app_keys (
+  name       TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One row per DEVICE. endpoint is UNIQUE across all users on purpose: a phone
+-- handed to somebody else who signs in re-points rather than notifying its
+-- previous owner.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT NOT NULL UNIQUE,
+  p256dh     TEXT NOT NULL,
+  auth       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
 
 -- ---- social (SOCIAL.md) -----------------------------------------------------
 -- Person -> person. `follows` (below) is person -> PROJECT: same word, different
@@ -561,6 +585,7 @@ volunteers (flat rate is intent).
 | I13 | An `attestations` row always names two **different** users (CHECK) and is unique per (event, scanner, subject) — a repeat scan is a no-op, never an error |
 | I14 | A scan never creates a participation for the **subject**; the scanner's participation always carries a `waiver_id` from the event's project (I6 holds for every row, however created) |
 | I15 | `participations.attested` is true ⟺ an attestation for that (event, user) existed at or before the participation was written — set at insert, and flipped by a later scan only on a participation that is still open |
+| P-I1…P-I6 | The push invariants — a stable VAPID key, recipients identical to the bell's, dead subscriptions dropped, and no screen offering a switch that cannot work. Stated and tested in [PUSH.md § 8](./PUSH.md#8-invariants) |
 | S-I1…S-I8 | The social invariants — nobody follows or blocks themselves, blocking keeps the follower, a blocked viewer sees no activity anywhere, and unread is exactly the notifiable activity after my watermark. Stated and tested in [SOCIAL.md § 6](./SOCIAL.md#6-invariants) |
 | L-I1…L-I6 | The location invariants — one row per normalized address, coordinates that flow both ways and are never overwritten, prefix-first suggestions that never expose a position. Stated and tested in [LOCATIONS.md § 6](./LOCATIONS.md#6-invariants) |
 | F-I1…F-I9 | The one-feed invariants — event matching, the ≤2 records per card, and "coordinates are never served". Stated and tested in [FEED.md § 9](./FEED.md#9-invariants-the-test-suite-asserts-these) |

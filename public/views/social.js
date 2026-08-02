@@ -9,6 +9,7 @@ import {
   toast, toastErr, errMessage, fmtDateTime,
 } from '../ui.js';
 import { recordCard, timeAgo } from './records.js';
+import { pushState, enablePush, disablePush } from '../push.js';
 
 const PAGE = 20;
 
@@ -308,6 +309,7 @@ export async function notificationsView() {
   const root = el('<div class="stack"></div>');
   root.append(el('<h1>Notifications</h1>'));
   root.append(prefCard());
+  root.append(phoneCard());
   root.append(activityFeed('/notifications', {
     empty: 'Nothing yet — follow people to hear when they RSVP or check in.',
     pick: (d) => d.items,          // this endpoint carries the count alongside
@@ -319,6 +321,78 @@ export async function notificationsView() {
   api('/notifications/seen', { method: 'POST' })
     .then(() => import('../app.js').then((m) => m.refreshUnread()))
     .catch(() => {});
+}
+
+// Notifications on the PHONE, with the app closed (PUSH.md §6). Shows exactly one
+// of five states, so a person always learns WHY they will or will not be buzzed —
+// and never gets a switch that cannot work.
+function phoneCard() {
+  const card = el('<div class="card stack"></div>');
+  const paint = (state) => {
+    clear(card);
+    card.append(el('<div><strong>On this phone</strong></div>'));
+
+    if (state === 'ios-needs-install') {
+      // The one case with a fix. Web Push does not exist in an iOS Safari tab at
+      // all, so "Add to Home Screen" IS the on-switch — say so, with the steps.
+      card.append(el(
+        '<p class="muted" style="margin:0">To get notifications on an iPhone or iPad, ' +
+        'add Active Impact to your Home Screen first — Apple only allows them for ' +
+        'installed apps.</p>',
+      ));
+      const steps = el('<ol class="steps muted"></ol>');
+      steps.append(el('<li>Tap the <strong>Share</strong> button in Safari</li>'));
+      steps.append(el('<li>Choose <strong>Add to Home Screen</strong></li>'));
+      steps.append(el('<li>Open Active Impact from your Home Screen, then come back here</li>'));
+      card.append(steps);
+      return;
+    }
+
+    if (state === 'unsupported') {
+      card.append(el('<p class="muted" style="margin:0">This browser can\'t send ' +
+        'notifications to your phone. The bell above still works whenever the app is open.</p>'));
+      return;
+    }
+
+    if (state === 'denied') {
+      card.append(el('<p class="muted" style="margin:0">Notifications are blocked for ' +
+        'this site. Your browser won\'t let us ask again — turn them back on in its ' +
+        'site settings for this page, then reload.</p>'));
+      return;
+    }
+
+    if (state === 'on') {
+      card.append(el('<p class="muted" style="margin:0">🔔 This device will buzz when ' +
+        'people you follow RSVP or check in — even with the app closed.</p>'));
+      const off = el('<button class="act block">Turn off on this device</button>');
+      off.onclick = async () => {
+        off.disabled = true;
+        try { paint(await disablePush()); toast('Off on this device'); }
+        catch (e) { off.disabled = false; toastErr(e); }
+      };
+      card.append(off);
+      return;
+    }
+
+    // 'off' — supported, not registered here yet.
+    card.append(el('<p class="muted" style="margin:0">Get a notification on this ' +
+      'device when people you follow RSVP or check in, even when the app is closed.</p>'));
+    const on = el('<button class="act primary block">Notify me on this phone</button>');
+    on.onclick = async () => {
+      on.disabled = true;
+      try {
+        const next = await enablePush();
+        paint(next);
+        if (next === 'on') toast('Notifications on 🔔');
+        else if (next === 'denied') toast('Your browser blocked notifications.');
+      } catch (e) { on.disabled = false; toastErr(e); }
+    };
+    card.append(on);
+  };
+
+  paint('off');                       // optimistic frame; corrected a tick later
+  pushState().then((s) => { if (card.isConnected) paint(s); }).catch(() => {});
+  return card;
 }
 
 // The founder's "you can ask to be notified": one switch, and opening this

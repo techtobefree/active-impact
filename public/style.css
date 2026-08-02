@@ -73,6 +73,10 @@ img { max-width: 100%; }
 .follow-panel .card.row + .card.row { margin-top: 0; border-top: 1px solid var(--line); }
 .follow-panel .empty { padding: 1rem .5rem; }
 
+/* The iOS "add to Home Screen" steps: numbered, readable, not a wall of prose. */
+.steps { margin: .4rem 0 0; padding-left: 1.2rem; font-size: .9rem; }
+.steps li + li { margin-top: .25rem; }
+
 /* An activity card is a line, not a photo — it must not shout over the feed. */
 .card.activity { padding-top: .7rem; padding-bottom: .7rem; }
 .card.activity .row { align-items: center; }

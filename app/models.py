@@ -79,6 +79,39 @@ class User(Base):
     )
 
 
+class AppKey(Base):
+    """Small key/value for things the app mints for ITSELF, as opposed to config
+    (which is env). Today: the VAPID pair (PUSH.md P1).
+
+    Generated on first use and kept here because push keys must be STABLE -- they
+    are baked into every subscription a browser holds, so regenerating them
+    silently breaks every device. The database is the one place that already
+    survives restarts, redeploys and restores.
+    """
+    __tablename__ = "app_keys"
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+
+class PushSubscription(Base):
+    """One row per DEVICE (PUSH.md P2): the push service's endpoint for that
+    browser, plus the two keys it gave us to encrypt to.
+
+    ``endpoint`` is UNIQUE across all users on purpose -- a phone handed to
+    somebody else who signs in re-points the subscription instead of carrying on
+    notifying its previous owner.
+    """
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    p256dh: Mapped[str] = mapped_column(Text, nullable=False)  # the device's public key
+    auth: Mapped[str] = mapped_column(Text, nullable=False)    # the device's auth secret
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+    __table_args__ = (Index("idx_push_subscriptions_user", "user_id"),)
+
+
 class Session(Base):
     __tablename__ = "sessions"
     token: Mapped[str] = mapped_column(Text, primary_key=True)  # secrets.token_hex(32)
