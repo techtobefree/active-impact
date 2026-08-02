@@ -15,7 +15,8 @@
 users ──┬── sessions                    (opaque bearer tokens, 30-day expiry)
         ├── user_follows               (person -> PERSON; distinct from `follows` below)
         ├── blocks                     (one-way: "they may not see my activity"; keeps the follow)
-        ├── activities                 (append-only PUBLIC projection: logged | rsvp | checked_in)
+        ├── activities                 (append-only PUBLIC projection: logged | rsvp |
+        │                               checked_in | created_project | scheduled_event)
         ├── projects (owner) ──┬── project_leaders   (organizers; manage the project + all its events)
         │                      ├── waivers           (versioned, immutable text; project-scoped)
         │                      ├── follows           (interest / bookmark; drives follower_count)
@@ -304,7 +305,8 @@ CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
 CREATE TABLE IF NOT EXISTS activities (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in')),
+  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in',
+                                           'created_project', 'scheduled_event')),
   event_id   BIGINT  REFERENCES events(id) ON DELETE CASCADE,
   project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
   record_id  BIGINT  REFERENCES service_records(id) ON DELETE CASCADE,

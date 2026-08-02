@@ -236,13 +236,15 @@ class Activity(Base):
     __tablename__ = "activities"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    kind: Mapped[str] = mapped_column(Text, nullable=False)  # logged | rsvp | checked_in
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # logged|rsvp|checked_in|created_project|scheduled_event
     event_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"))
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     record_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_records.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
-        CheckConstraint("kind IN ('logged', 'rsvp', 'checked_in')", name="kind_valid"),
+        CheckConstraint(
+            "kind IN ('logged', 'rsvp', 'checked_in', 'created_project', 'scheduled_event')",
+            name="kind_valid"),
         Index("idx_activities_user", "user_id", "id"),
         Index("idx_activities_created", "created_at"),
     )

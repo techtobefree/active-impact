@@ -74,6 +74,33 @@ test.describe('Following people', () => {
     await anaCtx.close();
   });
 
+  test("an organizer's page shows what they organized, and what is next", async ({ page, browser }, testInfo) => {
+    // The bug this covers: you tap the creator of a project and their page is
+    // blank, because organizing was not activity and nothing was back-filled.
+    const anaCtx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const ana = await anaCtx.newPage();
+    await registerUI(ana, uemail('org'), 'password123', 'Ana Organizer');
+    const anaId = await myId(ana);
+    const title = 'E2E Organized ' + uname();
+    const { projectId, eventId } = await liveEvent(ana, title);
+    await ana.goto(`/#/events/${eventId}`);
+    await ana.getByRole('button', { name: /^rsvp$/i }).click();
+
+    await registerUI(page, uemail('looker'), 'password123', 'Looker');
+    await page.goto(`/#/u/${anaId}`);
+
+    // Current information first — where they are going, under the buttons.
+    await expect(page.getByText(/now & next/i)).toBeVisible();
+    await expect(page.locator('.card', { hasText: title }).first()).toBeVisible();
+
+    // Then a separated section with their history, INCLUDING starting the project.
+    await expect(page.getByText(/^activity$/i)).toBeVisible();
+    await expect(page.locator('.card.activity', { hasText: /started/i }).first()).toBeVisible();
+    await shot(page, testInfo, 'organizer-page');
+    await expectNoGenericError(page);
+    await anaCtx.close();
+  });
+
   test('a blocked follower stays a follower and stops seeing me', async ({ page, browser }, testInfo) => {
     // I do something worth seeing.
     await registerUI(page, uemail('blocker'), 'password123', 'Blocker');

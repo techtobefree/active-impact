@@ -18,7 +18,7 @@ import psycopg
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field, field_validator
 
-from app import db, locations, serializers
+from app import activity, db, locations, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 
@@ -388,8 +388,11 @@ def create_project(body: ProjectCreate, user: dict = Depends(current_user)):
             "INSERT INTO waivers(project_id, version, text) VALUES (%s, 1, %s)",
             (pid, waiver_text),
         )
-        insert_event(c, pid, body.location_text, body.starts_at, body.expected_minutes,
-                     body.lat, body.lon)
+        ev = insert_event(c, pid, body.location_text, body.starts_at, body.expected_minutes,
+                          body.lat, body.lon)
+        # Starting a project is the most visible thing an organizer does — and it
+        # announces the first event too, so scheduling that one is not news again.
+        activity.record(c, "created_project", user["id"], event_id=ev["id"], project_id=pid)
     return _detail(_get_project(pid), user["id"])
 
 
@@ -464,6 +467,7 @@ def add_event(
             c, project_id, body.location_text, body.starts_at, body.expected_minutes,
             body.lat, body.lon,
         )
+        activity.record(c, "scheduled_event", user["id"], event_id=ev["id"], project_id=project_id)
     state = serializers.event_state(ev["id"], user["id"])
     return serializers.event_detail(ev, state, am_leader=True)
 

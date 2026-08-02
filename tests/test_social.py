@@ -24,6 +24,15 @@ def _kinds(rows):
     return [r["kind"] for r in rows]
 
 
+def _volunteering(rows):
+    """Kinds excluding the organizing that a fixture did to set the scene.
+
+    Most fixtures here create a project, which is itself activity now — real, and
+    tested on its own below, but noise when the subject is what a VOLUNTEER did.
+    """
+    return [r["kind"] for r in rows if r["kind"] not in ("created_project", "scheduled_event")]
+
+
 # ---- following (S-I1, S-I2) -------------------------------------------------
 
 def test_follow_and_unfollow_are_idempotent(register):
@@ -97,7 +106,8 @@ def test_logging_a_service_is_activity(register):
     p, ev = _now_event(ana)
     _log(ana, event_id=ev["id"])
     rows = ana.get(f"/api/users/{ana_u['id']}/activity").json()
-    assert _kinds(rows) == ["logged"]
+    assert _volunteering(rows) == ["logged"]
+    assert rows[0]["kind"] == "logged"          # newest first
     assert rows[0]["event"]["project_title"] == p["title"]
     assert rows[0]["record"]["caption"] == "Sorted boxes"   # the photo itself rides along
     assert rows[0]["actor"]["id"] == ana_u["id"]
@@ -110,7 +120,7 @@ def test_rsvp_is_activity_once(register):
     ana.post(f"/api/events/{ev}/rsvp")
     ana.post(f"/api/events/{ev}/rsvp")   # idempotent — must not re-announce
     rows = ana.get(f"/api/users/{ana_u['id']}/activity").json()
-    assert _kinds(rows) == ["rsvp"]
+    assert _volunteering(rows) == ["rsvp"]
     assert rows[0]["event"]["id"] == ev
 
 
@@ -120,7 +130,7 @@ def test_checking_in_is_activity(register):
     ana.post(f"/api/events/{ev['id']}/checkin")
     rows = ana.get(f"/api/users/{ana_u['id']}/activity").json()
     # The rsvp the check-in ensures is silent: the check-in is the news.
-    assert _kinds(rows) == ["checked_in"]
+    assert _volunteering(rows) == ["checked_in"]
 
 
 def test_checking_in_by_qr_code_is_activity(register):
@@ -129,7 +139,7 @@ def test_checking_in_by_qr_code_is_activity(register):
     p, ev = _now_event(ana)
     code = ana.get(f"/api/events/{ev['id']}").json()["checkin_code"]
     ben.post(f"/api/checkin/{code}/agree")
-    assert _kinds(ben.get(f"/api/users/{ben_u['id']}/activity").json()) == ["checked_in"]
+    assert _volunteering(ben.get(f"/api/users/{ben_u['id']}/activity").json()) == ["checked_in"]
 
 
 def test_deleting_a_record_removes_its_activity(register):
@@ -138,7 +148,7 @@ def test_deleting_a_record_removes_its_activity(register):
     p, ev = _now_event(ana)
     rec = _log(ana, event_id=ev["id"]).json()
     ana.delete(f"/api/service_records/{rec['id']}")
-    assert ana.get(f"/api/users/{ana_u['id']}/activity").json() == []
+    assert _volunteering(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == []
 
 
 def test_checkout_is_not_activity(register):
@@ -147,7 +157,7 @@ def test_checkout_is_not_activity(register):
     p, ev = _now_event(ana)
     r = ana.post(f"/api/events/{ev['id']}/checkin")
     ana.post(f"/api/participations/{r.json()['my_open_participation']['id']}/checkout")
-    assert _kinds(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == ["checked_in"]
+    assert _volunteering(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == ["checked_in"]
 
 
 # ---- the following feed (S-I6) ----------------------------------------------
@@ -162,7 +172,7 @@ def test_the_following_feed_is_what_the_people_i_follow_did(register):
 
     ana.post(f"/api/users/{ben_u['id']}/follow")
     rows = ana.get("/api/feed/following").json()
-    assert [r["actor"]["id"] for r in rows] == [ben_u["id"]]   # not cara: not followed
+    assert {r["actor"]["id"] for r in rows} == {ben_u["id"]}   # not cara: not followed
 
     ana.post(f"/api/users/{cara_u['id']}/follow")
     assert {r["actor"]["id"] for r in ana.get("/api/feed/following").json()} == {ben_u["id"], cara_u["id"]}
@@ -182,7 +192,7 @@ def test_the_following_feed_is_newest_first(register):
     ben.post(f"/api/events/{ev['id']}/rsvp")
     ben.post(f"/api/events/{ev['id']}/checkin")
     ana.post(f"/api/users/{ben_u['id']}/follow")
-    assert _kinds(ana.get("/api/feed/following").json()) == ["checked_in", "rsvp"]
+    assert _volunteering(ana.get("/api/feed/following").json()) == ["checked_in", "rsvp"]
 
 
 # ---- blocking (S-I3, S-I4, S-I7) --------------------------------------------
@@ -210,8 +220,8 @@ def test_a_blocked_follower_sees_none_of_my_activity(register):
     ana.post(f"/api/events/{ev['id']}/checkin")
     ben.post(f"/api/users/{ana_u['id']}/follow")
 
-    assert len(ben.get("/api/feed/following").json()) == 1
-    assert len(ben.get(f"/api/users/{ana_u['id']}/activity").json()) == 1
+    assert _volunteering(ben.get("/api/feed/following").json()) == ["checked_in"]
+    assert _volunteering(ben.get(f"/api/users/{ana_u['id']}/activity").json()) == ["checked_in"]
 
     ana.post(f"/api/users/{ben_u['id']}/block")
     assert ben.get("/api/feed/following").json() == []           # gone from the feed
@@ -227,7 +237,7 @@ def test_unblocking_restores_everything(register):
     ana.post(f"/api/users/{ben_u['id']}/block")
     r = ana.delete(f"/api/users/{ben_u['id']}/block")
     assert r.json() == {"is_blocked": False}
-    assert len(ben.get("/api/feed/following").json()) == 1
+    assert _volunteering(ben.get("/api/feed/following").json()) == ["checked_in"]
 
 
 def test_a_block_does_not_hide_me_from_everyone_else(register):
@@ -240,14 +250,14 @@ def test_a_block_does_not_hide_me_from_everyone_else(register):
     cara.post(f"/api/users/{ana_u['id']}/follow")
     ana.post(f"/api/users/{ben_u['id']}/block")
     assert ben.get("/api/feed/following").json() == []
-    assert len(cara.get("/api/feed/following").json()) == 1
+    assert _volunteering(cara.get("/api/feed/following").json()) == ["checked_in"]
 
 
 def test_i_always_see_my_own_activity(register):
     ana, ana_u, _ = register("ana")
     p, ev = _now_event(ana)
     ana.post(f"/api/events/{ev['id']}/checkin")
-    assert len(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == 1
+    assert _volunteering(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == ["checked_in"]
 
 
 def test_nobody_blocks_themselves(register):
@@ -291,7 +301,7 @@ def test_a_logged_photo_does_not_ping(register):
     data = ana.get("/api/notifications").json()
     assert data["unread"] == 0 and data["items"] == []
     # …but it IS in the feed.
-    assert _kinds(ana.get("/api/feed/following").json()) == ["logged"]
+    assert _volunteering(ana.get("/api/feed/following").json()) == ["logged"]
 
 
 def test_seen_clears_the_badge_and_new_activity_raises_it_again(register):
@@ -337,3 +347,99 @@ def test_me_carries_the_notification_preference(register):
     ana, _, _ = register("ana")
     me = ana.get("/api/me").json()
     assert me["notify_activity"] is True
+
+
+# ---- organizing is activity too ---------------------------------------------
+
+def test_creating_a_project_is_activity(register):
+    """The person you tap on from a project page IS its organizer — an empty
+    stream there was the whole point of the feature failing."""
+    ana, ana_u, _ = register("ana")
+    p = make_project(ana, title="Riverside Cleanup")
+    rows = ana.get(f"/api/users/{ana_u['id']}/activity").json()
+    assert _kinds(rows) == ["created_project"]
+    assert rows[0]["event"]["project_title"] == "Riverside Cleanup"
+
+
+def test_scheduling_another_event_is_activity(register):
+    """Creating the project already announced its first event, so only the LATER
+    ones are news of their own."""
+    ana, ana_u, _ = register("ana")
+    p = make_project(ana)
+    ana.post(f"/api/projects/{p['id']}/events", json={
+        "location_text": "North gate", "starts_at": _future(days=3),
+        "expected_minutes": 60,
+    })
+    assert _kinds(ana.get(f"/api/users/{ana_u['id']}/activity").json()) == [
+        "scheduled_event", "created_project",
+    ]
+
+
+def test_organizing_reaches_the_people_who_follow_me(register):
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ben.post(f"/api/users/{ana_u['id']}/follow")
+    make_project(ana, title="New Cleanup")
+    assert _kinds(ben.get("/api/feed/following").json()) == ["created_project"]
+
+
+def test_organizing_does_not_ping(register):
+    """S7 stays: the bell is for people turning up, not for admin."""
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ben.post(f"/api/users/{ana_u['id']}/follow")
+    make_project(ana)
+    assert ben.get("/api/notifications").json()["unread"] == 0
+
+
+# ---- what they are doing now (the top of their page) ------------------------
+
+def test_upcoming_shows_what_they_are_going_to(register):
+    ana, ana_u, _ = register("ana")
+    p = make_project(ana, title="Next Saturday")
+    ana.post(f"/api/events/{p['events'][0]['id']}/rsvp")
+    rows = ana.get(f"/api/users/{ana_u['id']}/upcoming").json()
+    assert len(rows) == 1
+    assert rows[0]["project_title"] == "Next Saturday"
+    assert rows[0]["is_here_now"] is False
+
+
+def test_upcoming_marks_where_they_are_right_now(register):
+    ana, ana_u, _ = register("ana")
+    p, ev = _now_event(ana, title="Happening Now")
+    ana.post(f"/api/events/{ev['id']}/checkin")
+    rows = ana.get(f"/api/users/{ana_u['id']}/upcoming").json()
+    assert [r["is_here_now"] for r in rows] == [True]
+
+
+def test_upcoming_drops_events_that_are_over(register):
+    ana, ana_u, _ = register("ana")
+    p = make_project(ana)
+    ev = p["events"][0]["id"]
+    ana.post(f"/api/events/{ev}/rsvp")
+    db.query(
+        "UPDATE events SET starts_at = now() - make_interval(mins => expected_minutes + 60) "
+        "WHERE id = %s", (ev,),
+    )
+    assert ana.get(f"/api/users/{ana_u['id']}/upcoming").json() == []
+
+
+def test_upcoming_is_soonest_first(register):
+    ana, ana_u, _ = register("ana")
+    later = make_project(ana, title="Later", starts_at=_future(days=9))
+    sooner = make_project(ana, title="Sooner", starts_at=_future(days=2))
+    for p in (later, sooner):
+        ana.post(f"/api/events/{p['events'][0]['id']}/rsvp")
+    rows = ana.get(f"/api/users/{ana_u['id']}/upcoming").json()
+    assert [r["project_title"] for r in rows] == ["Sooner", "Later"]
+
+
+def test_a_blocked_viewer_sees_no_plans_either(register):
+    """The visibility rule is one rule — it covers this surface too."""
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    p = make_project(ana)
+    ana.post(f"/api/events/{p['events'][0]['id']}/rsvp")
+    assert len(ben.get(f"/api/users/{ana_u['id']}/upcoming").json()) == 1
+    ana.post(f"/api/users/{ben_u['id']}/block")
+    assert ben.get(f"/api/users/{ana_u['id']}/upcoming").json() == []

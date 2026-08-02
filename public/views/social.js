@@ -18,6 +18,14 @@ const VERB = {
   rsvp: 'is going to',
   checked_in: 'checked in at',
   logged: 'logged a service at',
+  created_project: 'started',
+  scheduled_event: 'scheduled a new event at',
+};
+const MARK = {
+  checked_in: ['green', '📍 here'],
+  rsvp: ['muted', '🗓 going'],
+  created_project: ['green', '🌱 new'],
+  scheduled_event: ['muted', '🗓 added'],
 };
 
 // One activity -> a card. A `logged` activity IS its record card (the photo is
@@ -39,7 +47,8 @@ export function activityCard(a) {
     `<div class="small muted">${esc(timeAgo(a.created_at))}${ev ? ` · ${esc(fmtDateTime(ev.starts_at))}` : ''}</div></div>`,
   );
   row.append(body);
-  row.append(el(`<span class="pill ${a.kind === 'checked_in' ? 'green' : 'muted'}">${a.kind === 'checked_in' ? '📍 here' : '🗓 going'}</span>`));
+  const [tone, label] = MARK[a.kind] || ['muted', ''];
+  if (label) row.append(el(`<span class="pill ${tone}">${label}</span>`));
   card.append(row);
   return card;
 }
@@ -84,6 +93,31 @@ export function activityFeed(path, { empty = 'Nothing here yet.', pick } = {}) {
   root.append(list, moreWrap);
   load(true);
   return root;
+}
+
+// What this person is doing now and next (SOCIAL.md §5). Sits directly under the
+// buttons on their page, because it is the CURRENT information — the history
+// belongs below it, behind its own divider.
+export function upcomingSection(userId) {
+  const wrap = el('<div class="stack"></div>');
+  api(`/users/${encodeURIComponent(userId)}/upcoming`)
+    .then((rows) => {
+      if (!rows || !rows.length || !wrap.isConnected) return;
+      wrap.append(el('<div class="section-label">Now &amp; next</div>'));
+      for (const r of rows) {
+        const card = el(`<a class="card row" href="#/events/${esc(r.event_id)}"></a>`);
+        card.append(el(
+          `<div class="grow"><strong>${esc(r.project_title)}</strong>` +
+          `<div class="small muted">${esc(fmtDateTime(r.starts_at))} · ${esc(r.location_text)}</div></div>`,
+        ));
+        card.append(el(r.is_here_now
+          ? '<span class="pill green">📍 here now</span>'
+          : '<span class="pill muted">🗓 going</span>'));
+        wrap.append(card);
+      }
+    })
+    .catch(() => { /* their plans are a bonus — never break the page for them */ });
+  return wrap;
 }
 
 // ---- people lists -----------------------------------------------------------

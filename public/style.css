@@ -217,7 +217,15 @@ input.invalid, textarea.invalid { border-color: var(--red); outline-color: color
 #nav a.active { color: var(--green); }
 
 /* ---- misc ---- */
-.section-label { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 1rem 0 .3rem; }
+.section-label {
+  font-size: .8rem; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); font-weight: 700;
+  margin: 1.4rem 0 .5rem; padding-top: .9rem;
+  border-top: 1px solid var(--line);   /* the line that says "new section" */
+}
+/* The first section on a screen needs no rule above it — there is nothing to
+   separate it from. */
+.stack > .section-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 .banner { padding: .7rem .9rem; border-radius: 10px; font-size: .9rem; }
 .banner.info { background: color-mix(in srgb, var(--green) 12%, transparent); }
 .banner.warn { background: color-mix(in srgb, var(--amber) 15%, transparent); }

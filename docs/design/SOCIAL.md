@@ -20,12 +20,13 @@
 | # | Decision | Rationale |
 |---|---|---|
 | **S1** | **Following a person is a new relation**, `user_follows(follower_id, followee_id)` — deliberately separate from the existing project `follows`. | Same English word, different object. Both stay what they are: an interest signal with no powers. Overloading one table to mean two things would poison every query that touches either. |
-| **S2** | **Three actions are public activity**: `logged` (a service record), `rsvp`, `checked_in`. Written to an `activities` row **in the same transaction** as the action itself. | Exactly the three the founder named. Same-tx is the house rule already used for `audit_log`: an activity can never exist without its action, nor an action without its activity. |
+| **S2** | **Five actions are public activity**: `logged` (a service record), `rsvp`, `checked_in`, and — added 2026-08-02 — `created_project` and `scheduled_event`. Written to an `activities` row **in the same transaction** as the action itself. | The founder named the first three, but the first person you ever tap on is a project's **organizer**, and organizing was not being recorded at all: their page came up blank. Starting a project is the most visible thing anyone does here. Same-tx is the house rule already used for `audit_log`: an activity can never exist without its action, nor an action without its activity. |
+| **S2b** | **Creating a project announces its first event too**, so only *later* events produce `scheduled_event`. | One action, one feed item. A project and the event it was created with are the same piece of news. |
 | **S3** | **`activities` is a public projection; `audit_log` stays internal.** Two append-only tables on purpose. | An audit row is a reporting record and must never be reshaped for display; an activity row is public and is *deleted with its subject*. Merging them would tie the ledger's shape to the feed's. The duplicated write is two lines. |
 | **S4** | **Blocking is a one-way visibility mute that KEEPS the follow.** They stay a follower, stop seeing my activity, and can be unblocked. They are not told. | Verbatim from the founder: *"we can block them so they can't see what we do — they remain our followers, and we can unblock them if we choose to."* Unusual (most apps drop the follow); it is what was asked for, so it is what it does. |
 | **S5** | **A block covers the activity surfaces, not public project content.** Blocked people stop seeing my activity feed and my profile's activity; my photo on a project card — content *about a public event* — stays. | My activity stream is about *me*; a project's feed is about the project. Filtering public event content per viewer would also mean no cacheable public read anywhere. **Flagged**: if the founder wants a total block, that is a bigger, slower change and should be decided deliberately (§7). |
 | **S6** | **Notifications are DERIVED, not fanned out.** No `notifications` table: unread = activities by people I follow, of notifiable kinds, newer than my `notifications_seen_at` watermark. | One column instead of a row per user per event. Nothing to backfill, nothing to keep in sync, and the badge can never disagree with the list it opens. |
-| **S7** | **Notifiable kinds are `rsvp` and `checked_in`.** A logged service appears in the feed but does not ping. | *"…notified of when your friends are going to RSVP or check into things."* Photos are ambient; someone turning up somewhere is the thing worth a nudge. Per-user on/off (`notify_activity`), default **on**. |
+| **S7** | **Notifiable kinds are `rsvp` and `checked_in`.** A logged service — and organizing — appears in the feed but does not ping. | *"…notified of when your friends are going to RSVP or check into things."* Photos are ambient; someone turning up somewhere is the thing worth a nudge. Per-user on/off (`notify_activity`), default **on**. |
 | **S8** | **In-app notifications only** — a bell with an unread dot and a screen. Web push (permission prompts, VAPID keys, service-worker push handlers) stays deferred. | OVERVIEW.md already defers push. The bell delivers the value; push is a self-contained follow-on that needs its own pass. |
 | **S9** | **Home gains a `Following` tab** rather than mixing activity into the project cards. | FEED.md F2 collapsed two feeds into one and that must hold. Activity items are a different shape from project cards; giving them a tab keeps one screen and one scroll without re-fragmenting the card. |
 | **S10** | **Messaging is still not built** (OVERVIEW D8). The profile offers **Follow** and **Tip**. | The founder listed messaging as an example of "things you can do", not a requirement here. It is a whole domain (threads, delivery, moderation, abuse); naming it as still-deferred is more honest than a stub button. |
@@ -62,7 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
 CREATE TABLE IF NOT EXISTS activities (
   id         BIGSERIAL PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- who did it
-  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in')),
+  kind       TEXT NOT NULL CHECK (kind IN ('logged', 'rsvp', 'checked_in',
+                                           'created_project', 'scheduled_event')),
   event_id   BIGINT  REFERENCES events(id) ON DELETE CASCADE,
   project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
   record_id  BIGINT  REFERENCES service_records(id) ON DELETE CASCADE,
@@ -76,10 +78,24 @@ ALTER TABLE users
   ADD COLUMN notify_activity BOOLEAN NOT NULL DEFAULT true;  -- the on/off switch (S7)
 ```
 
-**No back-fill.** Existing check-ins and records predate the feed; inventing
-activity rows for them would put months-old "just checked in" items at the top of
-everybody's first Following feed. The stream starts now — same reasoning as
-FEED.md §8.
+**Back-filled (migration 0013).** 0012 shipped with *no* back-fill, on the
+reasoning that stale items would top everybody's first Following feed. **That
+reasoning was wrong**, and the founder found it immediately: rows are back-filled
+with their **original timestamps**, so they sort into the past exactly where they
+belong — while an empty profile for everyone who has ever done anything is a
+feature that looks broken.
+
+Unlike FEED.md §8 (which declined to invent a *location* it never recorded), none
+of this is guesswork: every row is derived from a fact already in the database —
+`projects.created_at`, `events.created_at`, `service_records.created_at`,
+`participations.checked_in_at`, `rsvps.created_at`.
+
+Two rules keep it honest:
+- an `rsvp` is back-filled only where the person **never checked in**, mirroring
+  the live behaviour (a check-in silently ensures an RSVP row and stays quiet
+  about it);
+- every existing user's `notifications_seen_at` is stamped to `now()`, so nobody
+  opens the app to a badge counting months of history.
 
 ## 3. Visibility — one rule, applied everywhere
 
@@ -102,6 +118,7 @@ The viewer always sees **their own** activity (you cannot block yourself — CHE
 | `GET /api/users/{id}/followers` 📄 | **person_card[]** (`id, display_name, is_guest, is_following` (do *I* follow them), `is_blocked` (have I blocked them — only meaningful on my own list)) |
 | `GET /api/users/{id}/following` 📄 | same shape |
 | `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first, filtered by §3 |
+| `GET /api/users/{id}/upcoming` | What they are doing now and next: not-over events they have an RSVP or participation for, soonest first, each with `is_here_now`. Same §3 filter — a blocked viewer gets `[]` |
 | `POST /api/users/{id}/block` · `DELETE …/block` | Mine only, idempotent → `{is_blocked}`. Never touches `user_follows` (S4) |
 | `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, newest first, §3-filtered. Powers the Following tab |
 | `GET /api/notifications` 📄 | `{unread, items: activity_card[]}` — items are notifiable kinds from my followees, §3-filtered; `unread` counts those after my watermark |
@@ -122,7 +139,8 @@ photo itself rather than a line about a photo.
 
 | Route | Change |
 |---|---|
-| `#/u/:id` **Their page** | Info at the top (avatar, name, bio, joined, the existing ⏱🪙📋 stats), then the actions — **Follow / Following** toggle and **Tip** — then **their activity feed**. Follower/following counts are tappable. |
+| `#/u/:id` **Their page** | Three bands, in this order: **information** (avatar, name, bio, joined, the ⏱🪙📋 stats, tappable follower/following counts) → **actions** (**Follow / ✓ Following**, **Tip**) → **Now & next**: where they are checked in *right now* and what they have said they are going to (`GET /users/:id/upcoming`), because that is the current information → a **labelled divider** → **Activity**, their history. |
+| Section dividers | `.section-label` renders as a **rule with a label above the section it names**, everywhere in the app — the founder asked for the separation to be obvious, and for it on every page, not just this one. |
 | `#/u/:id/followers` · `#/u/:id/following` | The two lists. Each row is a person (tap → their page). On **my own** followers list every row also carries **Block / Unblock** — the founder's exact ask, on the exact screen they asked for it. |
 | `#/me` | Gains a **Followers · Following** row with counts (→ the lists above), and the **notification preference** toggle. |
 | `#/` **Home** | Tabs become **Upcoming · Following · Past · Mine**. Following renders activity cards: who, what, when, and for a logged service the photo itself. Empty state points at finding people to follow. |
@@ -141,6 +159,8 @@ photo itself rather than a line about a photo.
 | **S-I6** | The Following feed contains only activity from people I follow, never my own. |
 | **S-I7** | `unread` = notifiable activity from my followees, after my watermark, §3-filtered; `POST /notifications/seen` makes it exactly 0. |
 | **S-I8** | No follower/following/activity shape ever exposes an email. |
+| **S-I9** | Organizing (`created_project`, `scheduled_event`) reaches followers' feeds but never the bell — the badge is for people turning up, not for admin. |
+| **S-I10** | Back-filled activity carries the timestamp of the thing that actually happened, and re-running the migration adds nothing (every insert is NOT EXISTS-guarded). |
 
 ## 7. Deliberately deferred (with the reasoning, so it can be revisited)
 

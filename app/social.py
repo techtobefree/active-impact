@@ -190,6 +190,47 @@ def user_activity(
     return activity.cards(rows, user["id"])
 
 
+@router.get("/users/{user_id}/upcoming")
+def user_upcoming(user_id: int, user: dict = Depends(current_user)):
+    """What this person is doing now and next — their CURRENT status.
+
+    Sits above their history on their page (the founder: "that\'s the current
+    information, so that should be the next thing that I see"). An event they are
+    checked into right now comes with ``is_here_now``; the rest are what they have
+    said they are going to, soonest first. Over events drop off by themselves.
+
+    Same visibility rule as everything else: someone they blocked sees nothing.
+    """
+    _require_user(user_id)
+    if is_blocked(user_id, user["id"]):
+        return []
+    rows = db.query(
+        "SELECT e.id AS event_id, e.project_id, e.starts_at, e.location_text, "
+        "       p.title AS project_title, "
+        "       EXISTS (SELECT 1 FROM participations pa WHERE pa.event_id = e.id "
+        "               AND pa.user_id = %s AND pa.checked_out_at IS NULL) AS is_here_now "
+        "FROM events e JOIN projects p ON p.id = e.project_id "
+        "WHERE e.status <> 'completed' "
+        "  AND now() <= e.starts_at + make_interval(mins => e.expected_minutes) "
+        "  AND (EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.user_id = %s) "
+        "    OR EXISTS (SELECT 1 FROM participations pa2 WHERE pa2.event_id = e.id "
+        "               AND pa2.user_id = %s)) "
+        "ORDER BY e.starts_at ASC, e.id ASC LIMIT 10",
+        (user_id, user_id, user_id),
+    )
+    return [
+        {
+            "event_id": r["event_id"],
+            "project_id": r["project_id"],
+            "project_title": r["project_title"],
+            "starts_at": r["starts_at"],
+            "location_text": r["location_text"],
+            "is_here_now": bool(r["is_here_now"]),
+        }
+        for r in rows
+    ]
+
+
 @router.get("/feed/following")
 def following_feed(
     page: Page = Depends(pagination), user: dict = Depends(current_user)

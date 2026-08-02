@@ -7,7 +7,7 @@ import {
 import { refresh, refreshMe } from '../app.js';
 import { convertForm } from './auth.js';
 import { myRecords } from './records.js';
-import { activityFeed } from './social.js';
+import { activityFeed, upcomingSection } from './social.js';
 
 // "My log" — everything I've logged, including the entries that matched no event
 // and therefore live only here (FEED.md F7).
@@ -71,6 +71,9 @@ export async function userView(id) {
   const root = el('<div class="stack"></div>');
   root.append(card);
   if (!isMe) root.append(followButton(user), tipSection(user));
+
+  // Current information first: where they are right now, what they are going to.
+  root.append(upcomingSection(user.id));
 
   // …and then the thing their page actually IS: what they have been doing.
   root.append(el('<div class="section-label">Activity</div>'));
