@@ -92,6 +92,27 @@ nothing may repaint a screen the user is already using.** Every one of these was
 invisible on localhost and reproducible against production, which is the argument
 for running the browser suite against the deployed site as a matter of course.
 
+**A fifth, inside a single view (2026-08-02).** The same shape one level down: the
+home feed's `load()` is called by tab taps *and* by the search box, so two can be
+in flight at once — and the slower one won the paint. Tapping **Following** while
+the projects request was still running filled that tab with project cards. The
+race had always been there between Upcoming/Past/Mine and was simply invisible,
+because all three render the same card shape; adding a tab with a *different*
+shape made it obvious.
+
+Fixed the same way as the suggestion box: a sequence number captured before the
+await, and whoever started last owns the container.
+
+```js
+const mine = ++loadSeq;
+const rows = await fetchIt();
+if (mine !== loadSeq) return;   // a newer tab or keystroke already owns this
+```
+
+**The generalization worth remembering: any handler that awaits and then writes to
+a shared node needs either a sequence guard or a queue.** The router got the
+queue; in-view loaders get the guard.
+
 ## Residual limitation
 
 A view whose *mounting* fetch hangs still delays the next view (never the chrome).
