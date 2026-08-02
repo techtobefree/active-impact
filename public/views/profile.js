@@ -7,19 +7,10 @@ import {
 import { refresh, refreshMe } from '../app.js';
 import { convertForm } from './auth.js';
 import { myRecords } from './records.js';
-import { activityFeed, upcomingSection } from './social.js';
+import { activityFeed, upcomingSection, followTabs } from './social.js';
 
 // "My log" — everything I've logged, including the entries that matched no event
 // and therefore live only here (FEED.md F7).
-// Followers / Following for me — the founder's "a list of our followers on our
-// profile", and the way to reach the Block control.
-function socialSection(me) {
-  const card = el('<div class="card row"></div>');
-  card.append(el(`<a class="grow" href="#/u/${esc(me.id)}/followers">👥 Followers</a>`));
-  card.append(el(`<a href="#/u/${esc(me.id)}/following">Following</a>`));
-  return card;
-}
-
 function myLogSection() {
   const wrap = el('<div class="stack"></div>');
   wrap.append(el('<div class="section-label">My log</div>'));
@@ -205,7 +196,7 @@ function guestMe(me) {
   save.append(convertForm({ onSuccess: () => { toast('Account saved 🎉'); refresh(); } }));
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, socialSection(me), save, appearanceCard(), myLogSection());
+  root.append(summary, followTabs(me), save, appearanceCard(), myLogSection());
   mount(root);
 }
 
@@ -257,6 +248,6 @@ function realMe(me) {
   actions.append(out);
 
   const root = el('<div class="stack"></div>');
-  root.append(summary, socialSection(me), editCard, actions, myLogSection());
+  root.append(summary, followTabs(me), editCard, actions, myLogSection());
   mount(root);
 }

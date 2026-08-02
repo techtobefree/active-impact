@@ -443,3 +443,57 @@ def test_a_blocked_viewer_sees_no_plans_either(register):
     assert len(ben.get(f"/api/users/{ana_u['id']}/upcoming").json()) == 1
     ana.post(f"/api/users/{ben_u['id']}/block")
     assert ben.get(f"/api/users/{ana_u['id']}/upcoming").json() == []
+
+
+# ---- the counts the profile card's tabs are drawn from ----------------------
+
+def test_me_carries_my_own_follow_counts(register):
+    """The card shows counts on its tabs and needs them to decide whether a
+    'See more' belongs at the bottom — so the private self view carries them."""
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ben.post(f"/api/users/{ana_u['id']}/follow")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    me = ana.get("/api/me").json()
+    assert me["follower_count"] == 1
+    assert me["following_count"] == 1
+
+
+# ---- sorting on the full list page ------------------------------------------
+
+def test_followers_sort_by_name(register):
+    ana, ana_u, _ = register("ana")
+    for name in ("zoe", "adam", "mia"):
+        other, _, _ = register(name)
+        other.post(f"/api/users/{ana_u['id']}/follow")
+    rows = ana.get(f"/api/users/{ana_u['id']}/followers?sort=name").json()
+    assert [r["display_name"] for r in rows] == ["adam", "mia", "zoe"]
+
+
+def test_followers_default_to_most_recent_first(register):
+    ana, ana_u, _ = register("ana")
+    for name in ("first", "second"):
+        other, _, _ = register(name)
+        other.post(f"/api/users/{ana_u['id']}/follow")
+    assert [r["display_name"] for r in ana.get(f"/api/users/{ana_u['id']}/followers").json()] == [
+        "second", "first",
+    ]
+
+
+def test_following_sorts_by_name_too(register):
+    ana, ana_u, _ = register("ana")
+    for name in ("zoe", "adam"):
+        other, other_u, _ = register(name)
+        ana.post(f"/api/users/{other_u['id']}/follow")
+    rows = ana.get(f"/api/users/{ana_u['id']}/following?sort=name").json()
+    assert [r["display_name"] for r in rows] == ["adam", "zoe"]
+
+
+def test_an_unknown_sort_falls_back_to_recent(register):
+    """A stale client must not get an error or an arbitrary order."""
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ben.post(f"/api/users/{ana_u['id']}/follow")
+    r = ana.get(f"/api/users/{ana_u['id']}/followers?sort=nonsense")
+    assert r.status_code == 200
+    assert [p["display_name"] for p in r.json()] == ["ben"]

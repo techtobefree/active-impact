@@ -2,7 +2,7 @@
 // opens offline. Shell assets are NETWORK-FIRST (fresh code always wins when
 // online; cache only serves offline), so clients can never get stuck on a stale
 // bundle. API calls bypass caching entirely.
-const SHELL = 'impact-shell-v33';
+const SHELL = 'impact-shell-v35';
 const ASSETS = [
   '/', '/index.html', '/style.css', '/app.js', '/api.js', '/ui.js', '/scan.js',
   '/views/auth.js', '/views/records.js', '/views/projects.js', '/views/checkin.js', '/views/social.js',

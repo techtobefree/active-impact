@@ -187,8 +187,8 @@ Every activity read composes the one visibility clause in `app/activity.py`:
 |---|---|---|
 | `POST /api/users/{id}/follow` | Idempotent → `{is_following: true, follower_count}` | 404; 409 `cannot_follow_self` |
 | `DELETE /api/users/{id}/follow` | Idempotent → `{is_following: false, follower_count}` | 404 |
-| `GET /api/users/{id}/followers` 📄 | **person_card[]**, newest first | 404 |
-| `GET /api/users/{id}/following` 📄 | **person_card[]** | 404 |
+| `GET /api/users/{id}/followers` 📄 | **person_card[]**. `?sort=recent` (default) `\|name`; an unknown value falls back to `recent` rather than erroring, so a stale client still gets a sane list | 404 |
+| `GET /api/users/{id}/following` 📄 | **person_card[]**, same `?sort=` | 404 |
 | `POST /api/users/{id}/block` | Mine only, idempotent → `{is_blocked: true}`. **Never touches `user_follows`** — they stay a follower (S4) | 404; 409 `cannot_block_self` |
 | `DELETE /api/users/{id}/block` | Idempotent → `{is_blocked: false}`. Restores everything, because blocking only ever filtered reads | 404 |
 | `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first. A viewer they blocked gets an empty stream — no error, no banner | 404 |

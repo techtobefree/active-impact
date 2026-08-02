@@ -21,6 +21,21 @@ def user_brief(uid: int | None) -> dict | None:
     )
 
 
+def user_follower_count(user_id: int) -> int:
+    """How many people follow this person (SOCIAL.md). Lives here, not in
+    app/social.py, so me_shape can carry it: serializers is the leaf module every
+    other one imports."""
+    return int(db.query_one(
+        "SELECT COUNT(*) AS c FROM user_follows WHERE followee_id = %s", (user_id,)
+    )["c"])
+
+
+def user_following_count(user_id: int) -> int:
+    return int(db.query_one(
+        "SELECT COUNT(*) AS c FROM user_follows WHERE follower_id = %s", (user_id,)
+    )["c"])
+
+
 def me_shape(row: dict) -> dict:
     """Private self view -- the ONLY shape that carries the email (and balance).
 
@@ -33,6 +48,10 @@ def me_shape(row: dict) -> dict:
     # Whether the bell counts anything (SOCIAL.md S7). Private view only -- how I
     # want to be nudged is nobody else's business.
     shape["notify_activity"] = bool(row["notify_activity"])
+    # My own follow counts: the profile card labels its tabs with them and uses
+    # them to decide whether a "See more" belongs under the first 100.
+    shape["follower_count"] = user_follower_count(row["id"])
+    shape["following_count"] = user_following_count(row["id"])
     # My personal QR handle. PRIVATE view only -- a code is handed out by its
     # owner (they show it), never scraped off a public profile (CHECKIN_PROOF.md §3).
     shape["qr_token"] = row["qr_token"]

@@ -151,6 +151,90 @@ test.describe('Following people', () => {
     await benCtx.close();
   });
 
+  test('followers/following expand in place, switch, and collapse again', async ({ page, browser }, testInfo) => {
+    await registerUI(page, uemail('tabs'), 'password123', 'Tab Owner');
+    const meId = await myId(page);
+
+    // Two people follow me; I follow one of them.
+    for (const name of ['Fan One', 'Fan Two']) {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const fan = await ctx.newPage();
+      await registerUI(fan, uemail('fan'), 'password123', name);
+      await fan.goto(`/#/u/${meId}`);
+      await fan.getByRole('button', { name: /^follow$/i }).click();
+      if (name === 'Fan One') {
+        const fanId = await myId(fan);
+        await page.goto(`/#/u/${fanId}`);
+        await page.getByRole('button', { name: /^follow$/i }).click();
+      }
+      await ctx.close();
+    }
+
+    await page.goto('/#/me');
+    await page.reload();
+    const card = page.locator('.follow-card');
+    const panel = card.locator('.follow-panel');
+    const rows = panel.locator('.card.row');
+
+    // Collapsed to start: just the two tabs.
+    await expect(card.getByRole('button', { name: /followers/i })).toBeVisible();
+    await expect(panel).toBeHidden();
+    await shot(page, testInfo, 'collapsed');
+
+    // Tap Followers -> the list drops out of the same card.
+    await card.getByRole('button', { name: /followers/i }).click();
+    await expect(panel).toBeVisible();
+    await expect(rows).toHaveCount(2);
+    await shot(page, testInfo, 'followers-open');
+
+    // Tap Following -> switches without closing.
+    await card.getByRole('button', { name: /following/i }).click();
+    await expect(panel).toBeVisible();
+    await expect(rows).toHaveCount(1);
+    await shot(page, testInfo, 'following-open');
+
+    // Tap the open one again -> back to just the tabs.
+    await card.getByRole('button', { name: /following/i }).click();
+    await expect(panel).toBeHidden();
+    await expectNoGenericError(page);
+  });
+
+  test('past 100, the card hands over to the full page', async ({ page }, testInfo) => {
+    await registerUI(page, uemail('many'), 'password123', 'Popular');
+    const meId = await myId(page);
+
+    // A crowd is expensive to register for real, so the crowd is faked at the
+    // boundary being tested: exactly one page of rows, and a count beyond it.
+    await page.route(`**/api/users/${meId}/followers*`, async (route) => {
+      const body = Array.from({ length: 100 }, (_, i) => ({
+        id: 9000 + i, display_name: `Crowd ${i}`, is_guest: false,
+        is_following: false, is_blocked: false,
+      }));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+    await page.evaluate(() => {
+      const u = JSON.parse(localStorage.getItem('ai_user'));
+      u.follower_count = 137;
+      localStorage.setItem('ai_user', JSON.stringify(u));
+    });
+
+    await page.goto('/#/me');
+    const card = page.locator('.follow-card');
+    await card.getByRole('button', { name: /followers/i }).click();
+    await expect(card.locator('.follow-panel .card.row')).toHaveCount(100);
+    const seeAll = card.getByRole('link', { name: /see all 137/i });
+    await expect(seeAll).toBeVisible();
+    await shot(page, testInfo, 'see-all');
+
+    await seeAll.click();
+    await expect(page).toHaveURL(new RegExp(`#/u/${meId}/followers$`));
+    // The full page is the detailed one: it sorts.
+    await expect(page.getByRole('button', { name: /^name$/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^recent$/i })).toBeVisible();
+    await shot(page, testInfo, 'full-page');
+    await expectNoGenericError(page);
+  });
+
   test('the bell counts what people I follow do, and opening it clears the badge', async ({ page, browser }, testInfo) => {
     await registerUI(page, uemail('watcher'), 'password123', 'Watcher');
 
@@ -166,6 +250,9 @@ test.describe('Following people', () => {
     // She RSVPs — that is exactly what the founder wanted to be told about.
     await ana.goto(`/#/events/${eventId}`);
     await ana.getByRole('button', { name: /^rsvp$/i }).click();
+    // Wait for it to LAND (the action becomes Check in) — clicking only dispatches
+    // the request, and the bell below reads a count the server has to have written.
+    await expect(ana.getByRole('button', { name: /^check in$/i })).toBeVisible();
 
     await page.goto('/#/me');                       // any navigation refreshes the bell
     const bell = page.locator('#bell');

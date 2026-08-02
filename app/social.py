@@ -11,9 +11,9 @@ fan-out table and the badge cannot disagree with the list it opens.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 
-from app import activity, db
+from app import activity, db, serializers
 from app.auth import current_user
 from app.deps import Page, api_error, pagination
 
@@ -29,16 +29,9 @@ def _require_user(user_id: int) -> dict:
     return row
 
 
-def follower_count(user_id: int) -> int:
-    return int(db.query_one(
-        "SELECT COUNT(*) AS c FROM user_follows WHERE followee_id = %s", (user_id,)
-    )["c"])
-
-
-def following_count(user_id: int) -> int:
-    return int(db.query_one(
-        "SELECT COUNT(*) AS c FROM user_follows WHERE follower_id = %s", (user_id,)
-    )["c"])
+# The counts live in serializers (the leaf) so me_shape can use them too.
+follower_count = serializers.user_follower_count
+following_count = serializers.user_following_count
 
 
 def is_following(follower_id: int, followee_id: int) -> bool:
@@ -116,17 +109,29 @@ def unfollow(user_id: int, user: dict = Depends(current_user)):
     return {"is_following": False, "follower_count": follower_count(user_id)}
 
 
+# How the two lists may be ordered. An unknown value falls back to `recent`
+# rather than erroring: a stale client should get a sane list, not a 422.
+_ORDER = {
+    "recent": "f.created_at DESC, f.id DESC",
+    "name": "lower(u.display_name) ASC, u.id ASC",
+}
+
+
 @router.get("/users/{user_id}/followers")
 def followers(
-    user_id: int, page: Page = Depends(pagination), user: dict = Depends(current_user)
+    user_id: int,
+    sort: str = Query("recent"),
+    page: Page = Depends(pagination),
+    user: dict = Depends(current_user),
 ):
-    """Who follows this person, newest first. On my own list every row carries
-    ``is_blocked`` -- this is the screen the Block control lives on."""
+    """Who follows this person. Newest first by default; `?sort=name` for the
+    full-list page. On my own list every row carries ``is_blocked`` -- this is
+    the screen the Block control lives on."""
     _require_user(user_id)
     rows = db.query(
         "SELECT u.id, u.display_name, u.email FROM user_follows f "
         "JOIN users u ON u.id = f.follower_id WHERE f.followee_id = %s "
-        "ORDER BY f.created_at DESC, f.id DESC LIMIT %s OFFSET %s",
+        f"ORDER BY {_ORDER.get(sort, _ORDER['recent'])} LIMIT %s OFFSET %s",
         (user_id, page.limit, page.offset),
     )
     return person_cards(rows, user["id"])
@@ -134,13 +139,16 @@ def followers(
 
 @router.get("/users/{user_id}/following")
 def following(
-    user_id: int, page: Page = Depends(pagination), user: dict = Depends(current_user)
+    user_id: int,
+    sort: str = Query("recent"),
+    page: Page = Depends(pagination),
+    user: dict = Depends(current_user),
 ):
     _require_user(user_id)
     rows = db.query(
         "SELECT u.id, u.display_name, u.email FROM user_follows f "
         "JOIN users u ON u.id = f.followee_id WHERE f.follower_id = %s "
-        "ORDER BY f.created_at DESC, f.id DESC LIMIT %s OFFSET %s",
+        f"ORDER BY {_ORDER.get(sort, _ORDER['recent'])} LIMIT %s OFFSET %s",
         (user_id, page.limit, page.offset),
     )
     return person_cards(rows, user["id"])

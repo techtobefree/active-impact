@@ -611,6 +611,8 @@ volunteers (flat rate is intent).
 - **person_card** (SOCIAL.md): `id, display_name, is_guest, is_following,
   is_blocked` — my relationship to them. Never an email.
 - **me** (`GET /api/me`, the private self view): `id, email, display_name, bio,
-  balance, created_at, is_guest, notify_activity`. The **only** shape carrying the email (and
+  balance, created_at, is_guest, notify_activity, follower_count, following_count`
+  — the counts label the profile card's two tabs and decide whether a "See all N"
+  belongs under the first 100. The **only** shape carrying the email (and
   balance). `is_guest` = `email IS NULL`; a guest's `email` serializes as JSON
   `null`, never the string `"None"`.

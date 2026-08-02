@@ -65,6 +65,14 @@ img { max-width: 100%; }
    labels collide, and let each shrink evenly. */
 .tabs .act { padding-left: .35rem; padding-right: .35rem; font-size: .92rem; min-width: 0; }
 
+/* Followers / Following: two tabs that expand IN PLACE inside the card. The rows
+   are plain (no nested card chrome) and sit under a hairline, so an open list
+   reads as part of the card it dropped out of. */
+.follow-panel { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+.follow-panel .card.row { border: none; box-shadow: none; padding: .45rem 0; background: none; }
+.follow-panel .card.row + .card.row { margin-top: 0; border-top: 1px solid var(--line); }
+.follow-panel .empty { padding: 1rem .5rem; }
+
 /* An activity card is a line, not a photo — it must not shout over the feed. */
 .card.activity { padding-top: .7rem; padding-bottom: .7rem; }
 .card.activity .row { align-items: center; }

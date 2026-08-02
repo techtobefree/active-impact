@@ -154,32 +154,149 @@ function personRow(p, { canBlock = false } = {}) {
   return row;
 }
 
+// The profile card's Followers / Following, as two tabs that expand IN PLACE.
+//
+// Tap a tab to open its list under the card; tap the other to switch without
+// closing; tap the open one again to collapse back to just the two tabs. Each
+// list loads once, on first open, and shows the first 100 — past that, "See
+// more" hands over to the full page, which is where sorting lives.
+export function followTabs(me) {
+  const LIMIT = 100;
+  const card = el('<div class="card stack follow-card"></div>');
+  const tabs = el('<div class="row tabs"></div>');
+  const panel = el('<div class="follow-panel hidden"></div>');
+  const counts = { followers: me.follower_count || 0, following: me.following_count || 0 };
+  const cache = {};
+  let open = null;                                  // which tab is expanded
+
+  const btns = {};
+  for (const key of ['followers', 'following']) {
+    const label = key === 'followers' ? 'Followers' : 'Following';
+    const b = el(`<button class="act grow"><span>${label}</span> <strong>${esc(counts[key])}</strong></button>`);
+    b.onclick = () => (open === key ? collapse() : expand(key));
+    btns[key] = b;
+    tabs.append(b);
+  }
+
+  function paint() {
+    for (const k of Object.keys(btns)) btns[k].classList.toggle('primary', open === k);
+    panel.classList.toggle('hidden', open === null);
+  }
+
+  function collapse() { open = null; paint(); }
+
+  async function expand(key) {
+    open = key;
+    paint();
+    if (cache[key]) { render(key); return; }
+    clear(panel).append(spinner());
+    try {
+      cache[key] = await api(`/users/${me.id}/${key}?limit=${LIMIT}`);
+    } catch (e) {
+      clear(panel).append(emptyState(errMessage(e)));
+      return;
+    }
+    if (open === key) render(key);                  // they may have moved on
+  }
+
+  function render(key) {
+    const rows = cache[key] || [];
+    clear(panel);
+    if (!rows.length) {
+      panel.append(emptyState(key === 'followers'
+        ? 'Nobody follows you yet.' : "You aren't following anyone yet."));
+      return;
+    }
+    // Block belongs on my FOLLOWERS — it is about who sees me.
+    for (const p of rows) panel.append(personRow(p, { canBlock: key === 'followers' }));
+    if (counts[key] > rows.length) {
+      panel.append(el(
+        `<a class="act ghost block" href="#/u/${esc(me.id)}/${key}">` +
+        `See all ${esc(counts[key])}</a>`,
+      ));
+    }
+  }
+
+  card.append(tabs, panel);
+  return card;
+}
+
 async function peopleView(userId, which) {
   mount(spinner());
   const me = currentUser() || {};
   const mine = String(me.id) === String(userId);
-  let people, person;
+  let person;
   try {
-    [people, person] = await Promise.all([
-      api(`/users/${encodeURIComponent(userId)}/${which}?limit=100`),
-      api(`/users/${encodeURIComponent(userId)}`),
-    ]);
+    person = await api(`/users/${encodeURIComponent(userId)}`);
   } catch (e) {
     mount(emptyState(errMessage(e)));
     return;
   }
+
   const root = el('<div class="stack"></div>');
   root.append(el(`<a class="small muted" href="#/u/${esc(userId)}">← ${esc(person.display_name)}</a>`));
   root.append(el(`<h1>${which === 'followers' ? 'Followers' : 'Following'}</h1>`));
-  if (!people.length) {
-    root.append(emptyState(which === 'followers'
-      ? (mine ? 'Nobody follows you yet.' : 'No followers yet.')
-      : 'Not following anyone yet.'));
-  } else {
-    // Block only makes sense on MY OWN followers: it is about who sees me.
-    for (const p of people) root.append(personRow(p, { canBlock: mine && which === 'followers' }));
+
+  // This is the whole-list page, so it is where sorting lives.
+  let sort = 'recent';
+  const list = el('<div class="stack"></div>');
+  const sorter = el('<div class="row tabs"></div>');
+  const sortBtns = {};
+  for (const [key, label] of [['recent', 'Recent'], ['name', 'Name']]) {
+    const b = el(`<button class="act grow">${label}</button>`);
+    b.onclick = () => { if (sort === key) return; sort = key; paintSort(); load(true); };
+    sortBtns[key] = b;
+    sorter.append(b);
   }
+  const paintSort = () => {
+    for (const k of Object.keys(sortBtns)) sortBtns[k].classList.toggle('primary', sort === k);
+  };
+  // (load is defined below; the sort buttons call it after repainting.)
+  paintSort();
+
+  // This page holds the WHOLE list, however long it is — the card upstairs is
+  // the one that stops at 100.
+  const PER = 100;
+  const moreWrap = el('<div class="center hidden" style="margin-top:.5rem"></div>');
+  const moreBtn = el('<button class="act">Load more</button>');
+  moreWrap.append(moreBtn);
+
+  let seq = 0;
+  let offset = 0;
+  async function load(reset) {
+    const token = ++seq;
+    if (reset) { offset = 0; clear(list).append(spinner()); }
+    else { moreBtn.disabled = true; moreBtn.textContent = '…'; }
+    let people;
+    try {
+      people = await api(
+        `/users/${encodeURIComponent(userId)}/${which}?limit=${PER}&offset=${offset}&sort=${sort}`);
+    } catch (e) {
+      if (token === seq && reset) clear(list).append(emptyState(errMessage(e)));
+      else if (token === seq) toastErr(e);
+      return;
+    }
+    if (token !== seq) return;             // a newer sort already owns this
+    if (reset) clear(list);
+    if (reset && !people.length) {
+      list.append(emptyState(which === 'followers'
+        ? (mine ? 'Nobody follows you yet.' : 'No followers yet.')
+        : 'Not following anyone yet.'));
+      moreWrap.classList.add('hidden');
+      return;
+    }
+    // Block only makes sense on MY OWN followers: it is about who sees me.
+    for (const p of people) list.append(personRow(p, { canBlock: mine && which === 'followers' }));
+    offset += people.length;
+    moreBtn.disabled = false;
+    moreBtn.textContent = 'Load more';
+    moreWrap.classList.toggle('hidden', people.length < PER);
+  }
+  moreBtn.onclick = () => load(false);
+
+  root.append(sorter, list, moreWrap);
   mount(root);
+  load(true);
 }
 
 export const followersView = (id) => peopleView(id, 'followers');
