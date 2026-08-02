@@ -233,11 +233,14 @@ def announce_activity(actor: dict, kind: str, event_id: int) -> None:
     _pool.submit(work)
 
 
-def send_invite(inviter: dict, invitee_id: int, project: dict) -> None:
-    """Buzz ONE person: somebody invited them to a project (SOCIAL.md §5b).
+def send_invite(inviter: dict, invitee_id: int, target: dict) -> None:
+    """Buzz ONE person: somebody invited them to a project or an event.
 
-    Directed rather than fanned out, so it goes to that person's devices only --
-    and still off the request path, still honouring their notify switch.
+    ``target`` is ``{title, url}`` -- the caller knows whether the invitation was
+    to the project or to one occurrence, and the notification should open
+    whichever was meant. Directed rather than fanned out, so it goes to that
+    person's devices only, still off the request path, still honouring their
+    notify switch.
     """
     def work() -> None:
         try:
@@ -251,8 +254,8 @@ def send_invite(inviter: dict, invitee_id: int, project: dict) -> None:
                 return
             payload = {
                 "title": inviter["display_name"],
-                "body": f"invited you to {project['title']}",
-                "url": f"#/projects/{project['id']}",
+                "body": f"invited you to {target['title']}",
+                "url": target["url"],
             }
             private_pem, _ = keys()
             subject = _subject()

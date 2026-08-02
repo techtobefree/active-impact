@@ -256,3 +256,123 @@ import pytest  # noqa: E402
 def _fresh_pool():
     yield
     _restore_pool()
+
+
+# ---- event-scoped invitations (S17) -----------------------------------------
+
+def _event_invitable(client, event_id):
+    r = client.get(f"/api/events/{event_id}/invitable")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _event_invite(client, event_id, ids):
+    return client.post(f"/api/events/{event_id}/invite", json={"user_ids": ids})
+
+
+def _pair(register):
+    """ana, who ben follows, plus a project with one event."""
+    ana, ana_u, _ = register("ana", display_name="Ana Fields")
+    ben, ben_u, _ = register("ben")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    p = make_project(ana, title="Riverside Cleanup")
+    return ana, ana_u, ben, ben_u, p
+
+
+def test_inviting_to_one_event(register):
+    ana, _, ben, ben_u, p = _pair(register)
+    ev = p["events"][0]["id"]
+    assert _event_invite(ana, ev, [ben_u["id"]]).json() == {"invited": 1}
+    item = ben.get("/api/notifications").json()["items"][0]
+    assert item["kind"] == "invited"
+    # It points at the OCCURRENCE that was meant, not just the project.
+    assert item["event"]["id"] == ev
+    assert item["event"]["project_title"] == "Riverside Cleanup"
+    assert item["project"] is None
+
+
+def test_a_project_invite_still_points_at_the_project(register):
+    ana, _, ben, ben_u, p = _pair(register)
+    _invite(ana, p["id"], [ben_u["id"]])
+    item = ben.get("/api/notifications").json()["items"][0]
+    assert item["event"] is None
+    assert item["project"]["id"] == p["id"]
+
+
+def test_event_and_project_invitations_are_different_messages(register):
+    """"Come to this project" and "come on Saturday" are not the same thing."""
+    ana, _, ben, ben_u, p = _pair(register)
+    ev = p["events"][0]["id"]
+    assert _invite(ana, p["id"], [ben_u["id"]]).json() == {"invited": 1}
+    assert _event_invite(ana, ev, [ben_u["id"]]).json() == {"invited": 1}
+    assert ben.get("/api/notifications").json()["unread"] == 2
+
+
+def test_inviting_to_the_same_event_twice_notifies_once(register):
+    ana, _, ben, ben_u, p = _pair(register)
+    ev = p["events"][0]["id"]
+    assert _event_invite(ana, ev, [ben_u["id"]]).json() == {"invited": 1}
+    assert _event_invite(ana, ev, [ben_u["id"]]).json() == {"invited": 0}
+
+
+def test_two_events_of_one_project_are_separate_invitations(register):
+    ana, _, ben, ben_u, p = _pair(register)
+    from tests.test_events import _future
+    second = ana.post(f"/api/projects/{p['id']}/events", json={
+        "location_text": "North gate", "starts_at": _future(days=5), "expected_minutes": 60,
+    }).json()["id"]
+    _event_invite(ana, p["events"][0]["id"], [ben_u["id"]])
+    _event_invite(ana, second, [ben_u["id"]])
+    assert ben.get("/api/notifications").json()["unread"] == 2
+
+
+def test_the_event_picker_tracks_its_own_invitations(register):
+    """Being invited to the project must not mark the event as already invited."""
+    ana, _, ben, ben_u, p = _pair(register)
+    ev = p["events"][0]["id"]
+    _invite(ana, p["id"], [ben_u["id"]])
+    assert _event_invitable(ana, ev)[0]["invited"] is False
+    _event_invite(ana, ev, [ben_u["id"]])
+    assert _event_invitable(ana, ev)[0]["invited"] is True
+    assert _invitable(ana, p["id"])[0]["invited"] is True     # project one stands
+
+
+def test_the_event_graph_is_enforced_too(register):
+    ana, _, _, _, p = _pair(register)
+    stranger, stranger_u, _ = register("stranger")
+    assert _event_invite(ana, p["events"][0]["id"], [stranger_u["id"]]).json() == {"invited": 0}
+
+
+def test_inviting_to_a_missing_event_is_404(register):
+    ana, _, _, _, _p = _pair(register)
+    assert _event_invite(ana, 999999, [1]).status_code == 404
+    assert ana.get("/api/events/999999/invitable").status_code == 404
+
+
+def test_an_event_invite_buzzes_with_the_event_link(monkeypatch, register):
+    from app import push
+
+    sent = []
+    monkeypatch.setattr(push, "_deliver",
+                        lambda sub, payload, pem, subject: sent.append(payload))
+    ana, _, ben, ben_u, p = _pair(register)
+    ben.post("/api/push/subscribe", json={
+        "endpoint": "https://push.example/ben", "p256dh": "k", "auth": "a"})
+    ev = p["events"][0]["id"]
+    _event_invite(ana, ev, [ben_u["id"]])
+    push._pool.shutdown(wait=True)
+
+    assert sent == [{
+        "title": "Ana Fields",
+        "body": "invited you to Riverside Cleanup",
+        "url": f"#/events/{ev}",
+    }]
+
+
+def test_an_event_invite_is_still_not_public_activity(register):
+    ana, ana_u, ben, ben_u, p = _pair(register)
+    cara, cara_u, _ = register("cara")
+    cara.post(f"/api/users/{ana_u['id']}/follow")
+    _event_invite(ana, p["events"][0]["id"], [ben_u["id"]])
+    assert "invited" not in [a["kind"] for a in cara.get("/api/feed/following").json()]
+    assert cara.get("/api/notifications").json()["unread"] == 0

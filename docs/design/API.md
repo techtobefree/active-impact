@@ -66,6 +66,7 @@ Project endpoints are project-scoped; per-occurrence actions are event-scoped.
 | `DELETE /api/projects/{id}/leaders/{user_id}` | Leader. Owner cannot be removed | 403; 409 `cannot_remove_owner`; 404 |
 | `GET /api/projects/{id}/invitable` 📄 | **person_card[]** + `invited` — everyone in my follow graph (both directions) who has not blocked me, alphabetically, each flagged with whether I already invited them here (SOCIAL.md §5b) | 404 |
 | `POST /api/projects/{id}/invite` | `{user_ids: [...]}` → `{invited: n}` — n is how many were actually NEW. Anyone outside my graph, anyone who blocked me, and anyone I already invited is silently skipped: a stale picker must never make the button fail at somebody | 404 |
+| `GET /api/events/{id}/invitable` 📄 · `POST /api/events/{id}/invite` | The same pair, scoped to ONE occurrence — "come on Saturday" rather than "come to this project". Independent of project invitations, and of other events of the same project | 404 |
 | `POST /api/projects/{id}/follow` | Follow the project. Idempotent (`ON CONFLICT (user_id,project_id) DO NOTHING`). → `{is_following: true, follower_count}` | 404 |
 | `DELETE /api/projects/{id}/follow` | Unfollow. Idempotent. **200** (not 204 — the frontend needs the fresh count) → `{is_following: false, follower_count}` | 404 |
 

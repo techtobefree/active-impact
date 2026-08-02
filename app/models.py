@@ -269,12 +269,23 @@ class Invite(Base):
     __tablename__ = "invites"
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # Which OCCURRENCE, when the invitation came from an event page: "come on
+    # Saturday" is a different message from "come to this project", so they are
+    # different invitations. NULL = the project as a whole.
+    event_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("events.id", ondelete="CASCADE"))
     inviter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     invitee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("inviter_id <> invitee_id", name="not_self"),
-        UniqueConstraint("project_id", "inviter_id", "invitee_id", name="uq_invites"),
+        # Two PARTIAL uniques rather than one over a nullable column: Postgres
+        # treats NULLs as distinct, so a plain UNIQUE would let the same
+        # project-level invitation be inserted over and over. Same pattern as
+        # idx_participations_open / idx_claims_pending.
+        Index("idx_invites_project_unique", "project_id", "inviter_id", "invitee_id",
+              unique=True, postgresql_where=text("event_id IS NULL")),
+        Index("idx_invites_event_unique", "event_id", "inviter_id", "invitee_id",
+              unique=True, postgresql_where=text("event_id IS NOT NULL")),
         Index("idx_invites_invitee", "invitee_id", "id"),
     )
 

@@ -160,7 +160,7 @@ people we follow, or people that follow us."*
 | **S14** | **Notifications become a union of two sources**: activity from people I follow, and invites addressed to me. The watermark still governs unread for both. | An invite is not something a followee did — I may not even follow the inviter — so the derived-from-activity model (S6) cannot carry it alone. One extra source, same watermark, still nothing fanned out or stored twice. |
 | **S15** | **You cannot invite somebody who has blocked you.** | A block means "stop reaching me". An invite is reaching them; honouring the block here costs one clause and would be glaring if it were missing. |
 | **S16** | **Invites are idempotent per (project, inviter, invitee)** and the picker shows who you have already invited. Two *different* people may both invite the same person — that is two pieces of news. | Re-tapping must not re-notify, but a second person's invitation is genuinely new information. |
-| **S17** | **The invite targets the PROJECT**, which is where the button lives, and the notification links there — the project page already leads with its next events. | Inviting to a specific occurrence is a reasonable future refinement; inviting to the *thing* is what the button on the project page means. |
+| **S17** | **An invite targets whichever thing you invited from**: the project (from the project page) or one **event** (from the event page). The notification links to the one that was meant. | *"Come to this project"* and *"come on Saturday"* are different messages, so they are different invitations — being asked to a project does not mark Saturday as asked, and each occurrence can be asked separately. The nullable `event_id` needs **two partial uniques** rather than one, because Postgres treats NULLs as distinct and a single UNIQUE would let the same project-level invitation be inserted repeatedly. |
 
 **Schema**
 
@@ -168,12 +168,19 @@ people we follow, or people that follow us."*
 CREATE TABLE IF NOT EXISTS invites (
   id         SERIAL PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event_id   BIGINT  REFERENCES events(id) ON DELETE CASCADE,   -- NULL = the project as a whole
   inviter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   invitee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT ck_invites_not_self CHECK (inviter_id <> invitee_id),
-  CONSTRAINT uq_invites UNIQUE (project_id, inviter_id, invitee_id)
+  CONSTRAINT ck_invites_not_self CHECK (inviter_id <> invitee_id)
 );
+-- TWO partial uniques, not one over a nullable column: Postgres treats NULLs as
+-- distinct, so a single UNIQUE would let the same project-level invitation be
+-- inserted again and again.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_project_unique
+  ON invites(project_id, inviter_id, invitee_id) WHERE event_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_event_unique
+  ON invites(event_id, inviter_id, invitee_id) WHERE event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_invites_invitee ON invites(invitee_id, id DESC);
 ```
 
@@ -181,13 +188,15 @@ CREATE INDEX IF NOT EXISTS idx_invites_invitee ON invites(invitee_id, id DESC);
 
 | Endpoint | Notes |
 |---|---|
-| `GET /api/projects/{id}/invitable` 📄 | **person_card[]** + `invited` — everyone in my follow graph who has not blocked me, each flagged with whether I have already invited them here |
-| `POST /api/projects/{id}/invite` | `{user_ids: [...]}` → `{invited: n}`. Silently skips anyone outside the graph, anyone who blocked me, and anyone already invited by me — an invite button should never error at somebody for a stale list |
+| `GET /api/projects/{id}/invitable` 📄 · `GET /api/events/{id}/invitable` 📄 | **person_card[]** + `invited` — everyone in my follow graph who has not blocked me, each flagged with whether I have already invited them **to that same thing** |
+| `POST /api/projects/{id}/invite` · `POST /api/events/{id}/invite` | `{user_ids: [...]}` → `{invited: n}`, n being how many were actually new. Silently skips anyone outside the graph, anyone who blocked me, and anyone already invited — an invite button should never error at somebody for a stale list |
 
-**Screen.** Invite opens an inline picker under the button: the people in your
-graph, a filter box once there are more than a handful, and one tap per person
-that flips to **Invited ✓**. The invitee gets it in their notifications and, if
-they have turned their phone on, as a push.
+**Screens.** Both the project page and the **event page** carry an Invite button,
+each opening the same inline picker: the people in your graph, a filter box once
+there are more than a handful, one tap per person flipping to **✓ Invited**. The
+invitee gets it in their notifications and, if they have turned their phone on, as
+a push — and tapping it opens the project or the event, whichever they were asked
+to.
 
 ## 6. Invariants
 
@@ -204,7 +213,7 @@ they have turned their phone on, as a push.
 | **S-I9** | Organizing (`created_project`, `scheduled_event`) reaches followers' feeds but never the bell — the badge is for people turning up, not for admin. |
 | **S-I11** | An invite reaches only the invitee: it creates no activity row and appears in no feed. |
 | **S-I12** | Only people in my follow graph can be invited, enforced server-side; anyone who blocked me cannot be. |
-| **S-I13** | Re-inviting the same person to the same project changes nothing and re-notifies nobody. |
+| **S-I13** | Re-inviting the same person to the same **thing** changes nothing and re-notifies nobody — while a project invite and an event invite are separate invitations, and two events of one project are separate again. |
 | **S-I10** | Back-filled activity carries the timestamp of the thing that actually happened, and re-running the migration adds nothing (every insert is NOT EXISTS-guarded). |
 
 ## 7. Deliberately deferred (with the reasoning, so it can be revisited)

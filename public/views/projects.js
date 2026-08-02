@@ -262,7 +262,7 @@ export async function listView() {
 
 // The invite picker: everyone you follow or who follows you, each a single tap.
 // A filter appears once the list is long enough to need one.
-function invitePicker(projectId) {
+function invitePicker(scope, id) {
   const card = el('<div class="card stack"></div>');
   card.append(el('<div class="section-label" style="margin:0;padding:0;border:none">Invite someone</div>'));
   const list = el('<div class="stack"></div>');
@@ -270,7 +270,7 @@ function invitePicker(projectId) {
   card.append(filter, list);
   clear(list).append(spinner());
 
-  api(`/projects/${projectId}/invitable?limit=100`)
+  api(`/${scope}/${id}/invitable?limit=100`)
     .then((people) => {
       if (!card.isConnected) return;
       clear(list);
@@ -279,7 +279,7 @@ function invitePicker(projectId) {
         return;
       }
       filter.classList.toggle('hidden', people.length < 8);
-      const rows = people.map((p) => inviteRow(projectId, p));
+      const rows = people.map((p) => inviteRow(scope, id, p));
       for (const r of rows) list.append(r.node);
       filter.oninput = () => {
         const q = filter.value.trim().toLowerCase();
@@ -292,7 +292,7 @@ function invitePicker(projectId) {
 }
 
 // One person: tap once to invite, and the button says so afterwards.
-function inviteRow(projectId, person) {
+function inviteRow(scope, id, person) {
   const node = el('<div class="card row"></div>');
   node.append(avatarEl(person));
   node.append(el(`<a class="grow record-author" href="#/u/${esc(person.id)}">${esc(person.display_name)}</a>`));
@@ -306,7 +306,7 @@ function inviteRow(projectId, person) {
   btn.onclick = async () => {
     btn.disabled = true;
     try {
-      await api(`/projects/${projectId}/invite`, { body: { user_ids: [person.id] } });
+      await api(`/${scope}/${id}/invite`, { body: { user_ids: [person.id] } });
       person.invited = true;
       paint();
       toast(`Invited ${person.display_name}`);
@@ -431,7 +431,7 @@ export async function detailView(id) {
   const inviteSlot = el('<div></div>');
   inviteBtn.onclick = () => {
     if (inviteSlot.firstChild) { clear(inviteSlot); return; }   // tap again to close
-    clear(inviteSlot).append(invitePicker(id));
+    clear(inviteSlot).append(invitePicker('projects', id));
   };
 
   social.append(shareBtn, followBtn, inviteBtn);
@@ -706,6 +706,15 @@ export async function eventDetailView(eventId) {
     head.append(top);
   };
 
+  // Invite to THIS occurrence — "come on Saturday", as opposed to the project
+  // page's "come to this project". Separate invitations, separate pickers.
+  const inviteBtn = el('<button class="act block">Invite people</button>');
+  const inviteSlot = el('<div></div>');
+  inviteBtn.onclick = () => {
+    if (inviteSlot.firstChild) { clear(inviteSlot); return; }
+    clear(inviteSlot).append(invitePicker('events', eventId));
+  };
+
   // My personal code for this event — the thing OTHER people scan to check in
   // (CHECKIN_PROOF.md §5.2). Any attendee, not just leaders. It appears the
   // moment you become one, and is never rebuilt once shown: rebuilding it would
@@ -718,7 +727,7 @@ export async function eventDetailView(eventId) {
 
   renderHead(ev);
   syncCodeCard(ev);
-  root.append(head, codeSlot);
+  root.append(head, inviteBtn, inviteSlot, codeSlot);
 
   // Event photos: leaders can add/remove/set the event cover right here.
   if (ev.am_leader) {

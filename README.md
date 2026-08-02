@@ -38,7 +38,7 @@ python scripts/seed.py                # optional demo data (users ana/ben/mia, p
 ```bash
 . .venv/bin/activate
 docker compose up -d postgres
-python -m pytest -q                   # 400 tests: auth, ledger invariants, event matching, locations, social, all domains
+python -m pytest -q                   # 410 tests: auth, ledger invariants, event matching, locations, social, all domains
 python scripts/smoke.py http://localhost:8000   # end-to-end happy-path probe (real HTTP)
 ```
 

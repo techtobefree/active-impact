@@ -95,6 +95,43 @@ test.describe('Inviting people', () => {
     await strangerCtx.close();
   });
 
+  test('an event page invites to THAT occurrence', async ({ page, browser }, testInfo) => {
+    await registerUI(page, uemail('ehost'), 'password123', 'Event Host');
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const guest = await ctx.newPage();
+    await registerUI(guest, uemail('eguest'), 'password123', 'Saturday Guest');
+    const guestId = await myId(guest);
+    await page.goto(`/#/u/${guestId}`);
+    await page.getByRole('button', { name: /^follow$/i }).click();
+    await expect(page.getByRole('button', { name: /following/i })).toBeVisible();
+
+    const title = 'E2E Event Invite ' + uname();
+    const projectId = await makeProject(page, title);
+    const eventId = await page.evaluate(async (pid) => {
+      const t = localStorage.getItem('ai_token');
+      const p = await (await fetch('/api/projects/' + pid, {
+        headers: { Authorization: 'Bearer ' + t } })).json();
+      return p.events[0].id;
+    }, projectId);
+
+    await page.goto(`/#/events/${eventId}`);
+    await page.getByRole('button', { name: /invite people/i }).click();
+    const row = page.locator('.card.row', { hasText: 'Saturday Guest' });
+    await row.getByRole('button', { name: /^invite$/i }).click();
+    await expect(row.getByRole('button', { name: /invited/i })).toBeVisible();
+    await shot(page, testInfo, 'event-invite');
+    await expectNoGenericError(page);
+
+    // The invitation points at the EVENT, not just the project.
+    await guest.goto('/#/notifications');
+    await expect(guest.getByText(/invited you to/i)).toBeVisible();
+    await guest.getByRole('link', { name: title }).click();
+    await expect(guest).toHaveURL(new RegExp(`#/events/${eventId}$`));
+    await shot(guest, testInfo, 'lands-on-the-event');
+    await expectNoGenericError(guest);
+    await ctx.close();
+  });
+
   test('re-opening the picker shows who is already invited', async ({ page, browser }, testInfo) => {
     await registerUI(page, uemail('host2'), 'password123', 'Second Host');
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
