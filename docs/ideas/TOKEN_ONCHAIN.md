@@ -48,6 +48,7 @@ A token on an EVM chain, probably **Base**.
 |---|---|
 | **No dollar peg, no stablecoin.** | The contract records amounts. Any dollar equivalence is a reporting convention outside it, and a business states the retail value of what it gave. |
 | **The burn record is the point.** | It is the part that actually needs a public chain: permanent, tamper-evident, comparable across businesses, and verifiable without trusting us. |
+| **A listing is BINDING until withdrawn** (2026-08-03). | The stated goal is to *reliably* reward service, and reliability lives here: a token is worth something only if the thing it buys cannot evaporate at the counter. The business's control is the listing — withdraw it, or bound it with a quantity — not the individual person in front of them. |
 
 ## The one property that seems to define everything
 
@@ -68,20 +69,35 @@ there being a second door in.
 Not a to-do list. Each is here with what it costs either way, so a decision can
 be made once and written down properly.
 
-### 1. Can a business say no?
+### 1. Can a business say no? — ANSWERED: no. Binding until withdrawn.
 
-The founder's stated goal is to **reliably** reward service. Reliability lives
-entirely here: a token is worth something only if it can actually be redeemed.
+The business's control is the **listing**, not the person standing in front of
+them. They can withdraw it, or bound it with a quantity, but they cannot decline
+an individual holder of a token.
 
-- **A listing is a binding offer** until withdrawn → the volunteer can count on
-  it; the business has written an open-ended promise it may regret.
-- **A business can decline at the counter** → no unbounded exposure; the token
-  becomes "maybe," and one refusal in front of a friend does more damage to
-  trust than ten successful redemptions repair.
-- Middle grounds: quantities (already in the catalog), time-boxed offers,
-  reservations that hold a good for N hours.
+This is the right call for the stated goal, and it creates four consequences that
+are now the live questions:
 
-*Everything about supply balance and about how the token "feels" hangs off this.*
+**1a. It contradicts the catalog we already shipped.** `OVERVIEW.md` D9 has the
+poster **accept or decline** each claim — explicitly declinable, which is the
+opposite of binding. Either token-priced offers stop going through accept/decline,
+or "binding" is only a promise we make in copy. That contradiction should be
+resolved deliberately rather than discovered later.
+
+**1b. Quantity stops being optional.** Today `catalog_items.quantity` is nullable
+and NULL means unlimited. A binding offer with unlimited quantity is an unbounded
+promise; a small business could be cleared out by one enthusiastic holder. Bounded
+quantity — and possibly a per-person limit, which does not exist today — is what
+makes binding survivable.
+
+**1c. Withdrawal becomes a public act.** If binding is real, the only exit is
+withdrawing the listing, and *that* is the thing worth recording. A business that
+withdraws the moment redemptions arrive looks very different from one that
+doesn't, and on-chain that is visible without anyone having to police it.
+
+**1d. Binding means different things for a coffee and for four hours of dental
+work.** One is handed over; the other has to be scheduled. Binding-to-schedule and
+binding-to-hand-over may need different mechanics.
 
 ### 2. What actually brings a business in?
 
@@ -126,7 +142,22 @@ which is a genuinely strong answer for a local, in-person programme.
 Related: who holds the minting key, and what limits it. A single hot key that can
 mint without bound is the whole system's risk in one place.
 
-### 5. Does an unspent token last forever?
+### 5. When does the token actually burn — at claim, or at handover?
+
+Now the sharpest question, because "binding" is only as real as this moment.
+
+- **Burn at claim** → the holder walks in with a receipt for something already
+  paid for. Strongest guarantee; the business eats no-shows and holds stock for
+  people who never arrive.
+- **Burn at handover** → nothing is spent until the goods change hands; no
+  no-show cost. But the guarantee weakens to a reservation, and a business that
+  wants out can simply be slow.
+
+The existing catalog already leans one way — an accepted claim's screen is
+described as "the proof the claimant shows the business" — but that was written
+when a poster could still decline.
+
+### 6. Does an unspent token last forever?
 
 Every unredeemed token is a latent claim on somebody's goods. If nothing expires,
 that claim grows without limit and the business community carries it.
@@ -136,7 +167,7 @@ this." Alternatives: no expiry but a public dashboard of outstanding supply, so
 the community can see the overhang; or expiry only on tokens that have never
 moved in N years.
 
-### 6. What happens where there are no businesses yet?
+### 7. What happens where there are no businesses yet?
 
 Someone does service in a town with nothing to redeem against. Their tokens are
 real and useless. That is the fastest way to teach a community the token is a
@@ -145,7 +176,7 @@ gimmick — and it is most likely exactly where the programme is newest.
 Options: seed a region with a national partner; let tokens redeem against the
 project's own goods; accept it and market only where there is a business base.
 
-### 7. How does giving a token away actually work?
+### 8. How does giving a token away actually work?
 
 The founder expects many earners to donate rather than spend, and the app already
 has tipping and "register a need." So the real flow may be:
@@ -158,7 +189,7 @@ That is lovely, and it is also the strongest argument for closed-loop transfers:
 person-to-person movement must exist, but only between people, never onto a
 market. Open: does a giver choose the recipient, or is there a pool?
 
-### 8. Closed-loop is enforceable, but only mostly
+### 9. Closed-loop is enforceable, but only mostly
 
 A transfer allowlist genuinely prevents listing on an exchange. It does not
 prevent somebody selling their account, or "send me tokens and I'll Venmo you."
@@ -182,11 +213,11 @@ This model has decades of history and the failure modes are documented:
 - **Time banks** (Time Banks USA, hOurworld) — hours as currency, mutual
   exchange, explicitly non-monetary. Closest cousin, including the tax posture.
 - **LETS** (local exchange trading systems) — community currencies; the
-  literature on why most die is directly relevant to questions 1, 5 and 6.
+  literature on why most die is directly relevant to questions 1, 6 and 7.
 - **Ithaca HOURS** — a local currency that worked for a decade and then didn't;
   the wind-down is instructive.
 - **Loyalty-point accounting** — how airlines manage exactly the "unredeemed
-  liability grows without bound" problem in question 5.
+  liability grows without bound" problem in question 6.
 
 ## The smallest first version, if we wanted one
 
