@@ -27,7 +27,8 @@ decisions, so they can be cited from code and from other docs.
 | **T4** | **The business never takes possession of tokens.** Redemption burns from the holder and credits a counter against the business in the same transaction. | 2026-08-03 | *"As automated as possible so nobody gets to make any decisions that might be negative."* Achieved by removing the step rather than policing it: there is no moment where a business holds a token and could do something else with it. |
 | **T5** | **Businesses are paid in social gravity, not money.** The public, comparable, tamper-evident burn total is the entire return. | 2026-08-03 | They get no revenue from honouring tokens. What they get is proof — of a kind that is identical across businesses and impossible to inflate — plus the footfall of people coming in to redeem. |
 | **T6** | **A listing is BINDING until withdrawn.** A business cannot decline an individual token holder. Their control is the listing: withdraw it, or bound it with a quantity. | 2026-08-03 | The stated goal is to *reliably* reward service. A token is worth something only if what it buys cannot evaporate at the counter, and one refusal in front of a friend does more damage than ten smooth redemptions repair. |
-| **T7** | **The token burns at CLAIM, not at handover.** | 2026-08-03 | Binding is only as real as this moment. Burning at claim means the holder walks in with a receipt for something already paid for, and a business that wants out cannot simply be slow. The cost — no-shows — is accepted and its consequences are Q1 below. |
+| **T7** | **The token burns at CLAIM, not at handover.** | 2026-08-03 | Binding is only as real as this moment. Burning at claim means the holder walks in with a receipt for something already paid for, and a business that wants out cannot simply be slow. The cost is no-shows — accepted in T8. |
+| **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
 
@@ -63,19 +64,22 @@ closer to work than to volunteering. Both paths end in a burn.
 
 Each with what the fork *costs*, so it can be answered once and promoted to §1.
 
-### Q1. What happens to a claim that is never collected?
+### Q1. What happens to a claim that is never collected? — ANSWERED by T8: nothing.
 
-**Created by T7.** The tokens are already burned and the business already has the
-credit — for goods still sitting on their shelf. That overstates their giving, and
-the burn record's integrity is the entire product (T5).
+**The accepted cost, stated plainly:** a business's burn total can drift above the
+goods it actually handed over, and that total is the product (T5).
 
-- **Leave it** → simple; the number drifts upward from goods never actually given.
-- **Expire and refund** → the claim lapses, the goods return to stock, tokens are
-  re-minted to the holder and the business's counter is decremented. Honest, but
-  it means the counter can go down, and "burned" stops being final.
-- **Confirm at pickup** → the burn is provisional until collection is confirmed.
-  Reintroduces a step — but *not necessarily a decision*, if confirmation is a
-  QR scan rather than someone's judgement. The app already has that gesture.
+**Why the drift is smaller than it looks, and self-limiting:** inflating it costs
+real tokens, and under T2 the only way to get a token is to do service. A business
+wanting to fake a big number would have to find people willing to burn genuinely
+earned hours on goods they never collect. The economics defend themselves — which
+is what makes the essentialist answer the right one here rather than merely the
+cheap one.
+
+**Revisit if:** the gap between claims and collections becomes visible enough that
+businesses complain about each other's numbers, or somebody is caught farming it.
+Both are observable without building anything now — the claim and the collection
+are already separate events in Postgres.
 
 ### Q2. Does the existing accept/decline flow survive T6?
 
