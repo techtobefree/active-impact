@@ -29,6 +29,7 @@ decisions, so they can be cited from code and from other docs.
 | **T6** | **A listing is BINDING until withdrawn.** A business cannot decline an individual token holder. Their control is the listing: withdraw it, or bound it with a quantity. | 2026-08-03 | The stated goal is to *reliably* reward service. A token is worth something only if what it buys cannot evaporate at the counter, and one refusal in front of a friend does more damage than ten smooth redemptions repair. |
 | **T7** | **The token burns at CLAIM, not at handover.** | 2026-08-03 | Binding is only as real as this moment. Burning at claim means the holder walks in with a receipt for something already paid for, and a business that wants out cannot simply be slow. The cost is no-shows — accepted in T8. |
 | **T9** | **The chain is for the BUSINESS, not the volunteer.** The burn record goes on-chain; volunteer balances stay in Postgres. No volunteer wallets, no keys for guests, no change to onboarding. | 2026-08-03 | The burn total is what a business is actually paid in (T5), and it is the only part that needs to be permanent and publicly checkable. Businesses can manage a wallet; a guest who has not even given us an email cannot, and guest-first onboarding is the best thing about the app. |
+| **T10** | **A real ERC-20, not just a burn log.** The token exists on-chain from day one, held custodially in one treasury address while T9 holds; mint on service, burn on redemption. | 2026-08-03 | *Optionality.* If we ever decide to mint directly to volunteers, it becomes a change of custody rather than a migration — the same contract, the same balances, the same burn totals, nothing ported. Starting with a burn log and upgrading later would mean carrying historical totals into a new contract, which forfeits the permanence that was the whole reason to be on a chain. It also makes T1 publicly legible: **total supply IS service done and not yet honoured**, readable by anyone without us reporting it. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -123,18 +124,25 @@ That is still worth having, and it is worth saying out loud rather than letting
 mechanics (Q8) and per-person caps (Q3) are all now ordinary Postgres features
 that can change whenever we like, because no contract encodes them.
 
-### Q4b. Is there actually an ERC-20, or only a burn log?
+### Q4b. ERC-20 or only a burn log? — ANSWERED by T10: a real ERC-20.
 
-**Created by T9, and it decides what the contract IS.**
+**The design rule this implies: separate the LEDGER from the POLICY.**
 
-- **A burn log only** → one contract, `burnedFor[business]`, plus events. No
-  token exists on-chain at all; "the token" is a Postgres integer and the chain
-  is a public, permanent record of redemptions. The most essentialist version.
-- **A real ERC-20, custodially held** → the app holds one treasury address;
-  service mints on-chain, redemption burns and credits the business. Postgres
-  still maps who owns what. Costs little more, and buys one genuinely nice
-  property: **total supply becomes the public measure of T1** — service done and
-  not yet honoured, visible to anyone, without us reporting it.
+T10 was chosen for flexibility, and flexibility is only preserved if the parts
+that must never change are kept apart from the parts that should be free to.
+
+- **The ledger is permanent and immutable** — balances, total supply, and
+  `burnedFor[business]`. This is the thing whose continuity T10 exists to
+  protect. It should not be behind an upgradeable proxy, because "permanent
+  record we could rewrite" is not a permanent record.
+- **The policy is swappable** — who may mint, who may hold, who may transfer,
+  read through a registry contract the token points at. Today: only the treasury
+  holds, and only the app mints. The day volunteers get wallets, that is a new
+  registry, not a new token.
+
+Mint must therefore be able to target **any** address from day one, even though
+today it only ever targets the treasury. Otherwise the future T10 was bought to
+keep open is closed by an argument list.
 
 ### Q5. What stops fake service?
 
