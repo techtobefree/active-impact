@@ -30,6 +30,7 @@ decisions, so they can be cited from code and from other docs.
 | **T7** | **The token burns at CLAIM, not at handover.** | 2026-08-03 | Binding is only as real as this moment. Burning at claim means the holder walks in with a receipt for something already paid for, and a business that wants out cannot simply be slow. The cost is no-shows — accepted in T8. |
 | **T9** | **The chain is for the BUSINESS, not the volunteer.** The burn record goes on-chain; volunteer balances stay in Postgres. No volunteer wallets, no keys for guests, no change to onboarding. | 2026-08-03 | The burn total is what a business is actually paid in (T5), and it is the only part that needs to be permanent and publicly checkable. Businesses can manage a wallet; a guest who has not even given us an email cannot, and guest-first onboarding is the best thing about the app. |
 | **T10** | **A real ERC-20, not just a burn log.** The token exists on-chain from day one, held custodially in one treasury address while T9 holds; mint on service, burn on redemption. | 2026-08-03 | *Optionality.* If we ever decide to mint directly to volunteers, it becomes a change of custody rather than a migration — the same contract, the same balances, the same burn totals, nothing ported. Starting with a burn log and upgrading later would mean carrying historical totals into a new contract, which forfeits the permanence that was the whole reason to be on a chain. It also makes T1 publicly legible: **total supply IS service done and not yet honoured**, readable by anyone without us reporting it. |
+| **T11** | **Claiming an offer settles immediately — accept/decline is removed.** The claimant claims, the price is taken, the quantity decrements, done. The poster's only control is withdrawing or bounding the listing. | 2026-08-03 | The shipped catalog (`OVERVIEW.md` **D9**) let a poster accept or decline each claim, which is the exact opposite of T6. This supersedes D9 for offers. **Note:** every offer in this app is already priced (0 = free), and needs are never claimable — so "token-priced offers" is all offers, and there is no subset to carve out. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -83,11 +84,32 @@ businesses complain about each other's numbers, or somebody is caught farming it
 Both are observable without building anything now — the claim and the collection
 are already separate events in Postgres.
 
-### Q2. Does the existing accept/decline flow survive T6?
+### Q2. Does accept/decline survive T6? — ANSWERED by T11: no, it is removed.
 
-**A live contradiction with shipped code.** `OVERVIEW.md` D9 has the poster
-**accept or decline** each claim; T6 says they cannot decline. Either
-token-priced offers bypass that step entirely, or "binding" is only copy.
+Supersedes `OVERVIEW.md` D9 for offers. When implemented, D9 must be edited
+rather than left to contradict T6 — a decision the design tree still asserts is
+worse than no decision at all.
+
+### Q2b. Does the price go TO the business, or out of existence?
+
+**The second contradiction with shipped code, and the bigger one.** It touches the
+same lines as T11, which is why they should be settled together.
+
+Today, accepting a claim calls `transfer(claimant → poster, price, 'spend')`: the
+tokens land in the **business's balance**. T4 says the business never takes
+possession, and T1 says redemption is where tokens leave existence.
+
+- **Keep the transfer** → no schema change, but T4 and T1 are false in the live
+  app, the business accumulates a balance it can spend or tip onward, and there is
+  no burn total to put on-chain later.
+- **Make it a burn** → matches T1/T4/T5 and gives the on-chain design something
+  real to mirror. Costs a schema change: `token_entries.to_user_id` is `NOT NULL`
+  today and the kinds are `earn|tip|spend`, so a burn needs either a nullable
+  recipient or a new kind — plus a per-business burn counter, which is the number
+  the whole token model is built to publish.
+
+Invariant I1 (`users.balance` = Σ in − Σ out) survives either way; a burn is
+simply an out-entry with no in.
 
 ### Q3. Does quantity become mandatory, and is there a per-person cap?
 
