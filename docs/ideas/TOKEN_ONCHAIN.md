@@ -28,6 +28,7 @@ decisions, so they can be cited from code and from other docs.
 | **T5** | **Businesses are paid in social gravity, not money.** The public, comparable, tamper-evident burn total is the entire return. | 2026-08-03 | They get no revenue from honouring tokens. What they get is proof — of a kind that is identical across businesses and impossible to inflate — plus the footfall of people coming in to redeem. |
 | **T6** | **A listing is BINDING until withdrawn.** A business cannot decline an individual token holder. Their control is the listing: withdraw it, or bound it with a quantity. | 2026-08-03 | The stated goal is to *reliably* reward service. A token is worth something only if what it buys cannot evaporate at the counter, and one refusal in front of a friend does more damage than ten smooth redemptions repair. |
 | **T7** | **The token burns at CLAIM, not at handover.** | 2026-08-03 | Binding is only as real as this moment. Burning at claim means the holder walks in with a receipt for something already paid for, and a business that wants out cannot simply be slow. The cost is no-shows — accepted in T8. |
+| **T9** | **The chain is for the BUSINESS, not the volunteer.** The burn record goes on-chain; volunteer balances stay in Postgres. No volunteer wallets, no keys for guests, no change to onboarding. | 2026-08-03 | The burn total is what a business is actually paid in (T5), and it is the only part that needs to be permanent and publicly checkable. Businesses can manage a wallet; a guest who has not even given us an email cannot, and guest-first onboarding is the best thing about the app. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -93,13 +94,47 @@ token-priced offers bypass that step entirely, or "binding" is only copy.
 unlimited — which under T6 is an unbounded promise. A per-person limit does not
 exist at all, so one holder can clear a shelf.
 
-### Q4. Is the chain for the volunteer, or for the business?
+### Q4. Is the chain for the volunteer, or for the business? — ANSWERED by T9: the business.
 
-Decides how big the first version is. If it is the **business** (the burn record),
-businesses can manage wallets and volunteer balances stay in Postgres — small and
-shippable. If it is the **volunteer**, every guest needs a wallet, and guest-first
-onboarding collides with key custody; passkey smart accounts with sponsored gas is
-the only version worth attempting, and it is a large piece of work.
+Three consequences, one of them a free win and one of them a thing to be honest
+about.
+
+**4a. It protects T2 for free.** With no volunteer wallets there is no way for a
+volunteer to list tokens on an exchange, because there is nothing to list. The
+closed-loop transfer allowlist we were leaning towards stops being necessary
+machinery and becomes a property of the architecture. *(This nearly moots the
+"closed-loop" item in the Leaning table — see Q10.)*
+
+**4b. Only the app can write to the chain.** A volunteer has no key, and a
+business must not hold one for this purpose either: if the business had to sign
+the redemption, they could decline to sign, which would undo T6 and T7 and put a
+negative decision back in exactly the place T4 removed it from.
+
+So the app's server key writes every record. **Be accurate about what that
+buys:** the chain gives permanence, timestamping, and tamper-evidence — nobody,
+including us, can quietly rewrite history — and it lets each business verify its
+own total against what it actually gave. It does **not** make the record
+trustless. We could write a false entry; we just could not un-write it.
+
+That is still worth having, and it is worth saying out loud rather than letting
+"on-chain" imply more than it delivers.
+
+**4c. The volunteer-side questions get much cheaper.** Expiry (Q6), donation
+mechanics (Q8) and per-person caps (Q3) are all now ordinary Postgres features
+that can change whenever we like, because no contract encodes them.
+
+### Q4b. Is there actually an ERC-20, or only a burn log?
+
+**Created by T9, and it decides what the contract IS.**
+
+- **A burn log only** → one contract, `burnedFor[business]`, plus events. No
+  token exists on-chain at all; "the token" is a Postgres integer and the chain
+  is a public, permanent record of redemptions. The most essentialist version.
+- **A real ERC-20, custodially held** → the app holds one treasury address;
+  service mints on-chain, redemption burns and credits the business. Postgres
+  still maps who owns what. Costs little more, and buys one genuinely nice
+  property: **total supply becomes the public measure of T1** — service done and
+  not yet honoured, visible to anyone, without us reporting it.
 
 ### Q5. What stops fake service?
 
