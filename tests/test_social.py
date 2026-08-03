@@ -497,3 +497,58 @@ def test_an_unknown_sort_falls_back_to_recent(register):
     r = ana.get(f"/api/users/{ana_u['id']}/followers?sort=nonsense")
     assert r.status_code == 200
     assert [p["display_name"] for p in r.json()] == ["ben"]
+
+
+# ---- searching the Following feed -------------------------------------------
+
+def test_the_following_feed_can_be_searched_by_person(register):
+    """The search box stays put on every tab, so it has to mean something on
+    this one: match the person, or the project they did it at."""
+    ana, _, _ = register("ana")
+    ben, ben_u, _ = register("ben", display_name="Ben Oduya")
+    cara, cara_u, _ = register("cara", display_name="Cara Lopez")
+    for c in (ben, cara):
+        p, ev = _now_event(c)
+        c.post(f"/api/events/{ev['id']}/checkin")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    ana.post(f"/api/users/{cara_u['id']}/follow")
+
+    rows = ana.get("/api/feed/following?q=oduya").json()
+    assert {r["actor"]["display_name"] for r in rows} == {"Ben Oduya"}
+
+
+def test_the_following_feed_can_be_searched_by_project(register):
+    ana, _, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    make_project(ben, title="Riverside Cleanup")
+    make_project(ben, title="Food Bank Sorting")
+
+    rows = ana.get("/api/feed/following?q=riverside").json()
+    assert [r["event"]["project_title"] for r in rows] == ["Riverside Cleanup"]
+
+
+def test_searching_the_following_feed_is_case_insensitive(register):
+    ana, _, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    make_project(ben, title="Riverside Cleanup")
+    assert len(ana.get("/api/feed/following?q=RIVERSIDE").json()) == 1
+
+
+def test_an_empty_search_returns_the_whole_feed(register):
+    ana, _, _ = register("ana")
+    ben, ben_u, _ = register("ben")
+    ana.post(f"/api/users/{ben_u['id']}/follow")
+    make_project(ben)
+    assert len(ana.get("/api/feed/following?q=").json()) == 1
+
+
+def test_searching_never_reveals_a_blocked_person(register):
+    """The visibility rule outranks the search: a filter must not become a hole."""
+    ana, ana_u, _ = register("ana")
+    ben, ben_u, _ = register("ben", display_name="Ben Oduya")
+    ben.post(f"/api/users/{ana_u['id']}/follow")
+    make_project(ana, title="Riverside Cleanup")
+    ana.post(f"/api/users/{ben_u['id']}/block")
+    assert ben.get("/api/feed/following?q=riverside").json() == []

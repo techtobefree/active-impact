@@ -241,10 +241,16 @@ def user_upcoming(user_id: int, user: dict = Depends(current_user)):
 
 @router.get("/feed/following")
 def following_feed(
-    page: Page = Depends(pagination), user: dict = Depends(current_user)
+    q: str | None = Query(default=None),
+    page: Page = Depends(pagination),
+    user: dict = Depends(current_user),
 ):
-    """The Following tab: what the people I follow have done. Never my own."""
-    rows = activity.following(user["id"], page.limit, page.offset)
+    """The Following tab: what the people I follow have done. Never my own.
+
+    ``q`` filters by person or project, so the home screen's search box means
+    something here too rather than disappearing when the tab changes.
+    """
+    rows = activity.following(user["id"], page.limit, page.offset, q=q)
     return activity.cards(rows, user["id"])
 
 

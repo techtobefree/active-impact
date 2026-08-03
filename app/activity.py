@@ -63,8 +63,17 @@ def by_user(user_id: int, viewer_id: int, limit: int, offset: int) -> list[dict]
     return _rows(f"a.user_id = %s AND {VISIBLE_TO}", [user_id, viewer_id], limit, offset)
 
 
-def following(viewer_id: int, limit: int, offset: int, kinds: tuple[str, ...] | None = None) -> list[dict]:
-    """Everything the people I follow have done. Never my own (S-I6)."""
+def following(
+    viewer_id: int, limit: int, offset: int,
+    kinds: tuple[str, ...] | None = None, q: str | None = None,
+) -> list[dict]:
+    """Everything the people I follow have done. Never my own (S-I6).
+
+    ``q`` matches the person or the project they did it at -- the home screen's
+    search box stays put on every tab, so it has to mean something on this one.
+    Applied AFTER the visibility rule, never instead of it: a filter must not
+    become a hole.
+    """
     where = (
         "a.user_id IN (SELECT followee_id FROM user_follows WHERE follower_id = %s) "
         f"AND {VISIBLE_TO}"
@@ -73,6 +82,15 @@ def following(viewer_id: int, limit: int, offset: int, kinds: tuple[str, ...] | 
     if kinds:
         where += " AND a.kind = ANY(%s)"
         params.append(list(kinds))
+    if q:
+        where += (
+            " AND (EXISTS (SELECT 1 FROM users au WHERE au.id = a.user_id "
+            "              AND au.display_name ILIKE %s)"
+            "   OR EXISTS (SELECT 1 FROM projects ap WHERE ap.id = a.project_id "
+            "              AND ap.title ILIKE %s))"
+        )
+        like = f"%{q}%"
+        params += [like, like]
     return _rows(where, params, limit, offset)
 
 

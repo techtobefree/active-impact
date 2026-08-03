@@ -223,7 +223,8 @@ export async function listView() {
     ? "You haven't joined or led any projects yet."
     : scope === 'past' ? 'No past projects yet.'
     : scope === 'following'
-      ? "Nothing yet. Open somebody's profile and follow them to see what they do."
+      ? (q ? `Nothing from the people you follow matches "${q}".`
+           : "Nothing yet. Open somebody's profile and follow them to see what they do.")
       : 'No projects yet. Post the first one.';
 
   // Tab taps and keystrokes both call load(), so two can be in flight at once —
@@ -238,7 +239,7 @@ export async function listView() {
     let rows;
     try {
       rows = following
-        ? await api('/feed/following?limit=30')
+        ? await api(`/feed/following?limit=30${q ? `&q=${encodeURIComponent(q)}` : ''}`)
         : await api(`/projects?scope=${scope}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
     } catch (e) {
       if (e && e.detail === 'unauthorized') throw e;
@@ -248,8 +249,10 @@ export async function listView() {
     }
     if (mine !== loadSeq) return;      // a newer tab or search already owns this
     clear(results);
-    // Search filters projects; it has no meaning over a person's activity.
-    search.classList.toggle('hidden', following);
+    // The search box STAYS on every tab — a control that disappears under you is
+    // more disorienting than one that changes what it searches. Following
+    // matches the person or the project; the others match projects.
+    search.placeholder = following ? 'Search people and projects' : 'Search projects';
     if (!rows.length) { results.append(emptyState(emptyMsg())); return; }
     for (const row of rows) results.append(following ? activityCard(row) : projectCard(row));
   }

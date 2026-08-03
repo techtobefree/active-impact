@@ -196,7 +196,7 @@ Every activity read composes the one visibility clause in `app/activity.py`:
 | `DELETE /api/users/{id}/block` | Idempotent → `{is_blocked: false}`. Restores everything, because blocking only ever filtered reads | 404 |
 | `GET /api/users/{id}/activity` 📄 | **activity_card[]**, newest first. A viewer they blocked gets an empty stream — no error, no banner | 404 |
 | `GET /api/users/{id}/upcoming` | Their **current status**: not-over events they have an RSVP or participation for, soonest first, each `{event_id, project_id, project_title, starts_at, location_text, is_here_now}`. Sits above their history on their page. Same block filter — a blocked viewer gets `[]` | 404 |
-| `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, never my own. Powers home's Following tab | — |
+| `GET /api/feed/following` 📄 | **activity_card[]** from everyone I follow, never my own. Powers home's Following tab. `?q=` matches the **person** or the **project** — the home screen's one search box searches whichever tab you are on. Applied after the block filter, never instead of it | — |
 | `GET /api/notifications` 📄 | `{unread, items}` from TWO sources merged newest-first (S14): notifiable activity (`rsvp`, `checked_in`) from my followees, and **invitations addressed to me** (`kind: "invited"`, carrying `project`). `unread` counts both after my watermark, and is 0 when `notify_activity` is off | — |
 | `POST /api/notifications/seen` | Moves the watermark to now → `{unread: 0}`. The items stay readable — seen is not a delete | — |
 

@@ -36,6 +36,8 @@ async function openFollowing(page) {
   // The tab must own what is under it: a slower projects request that started
   // first must not paint project cards here (caught on production latency).
   await expect(page.locator('#view a.card[href^="#/projects/"]')).toHaveCount(0);
+  // …and the search box stays put rather than vanishing under the tap.
+  await expect(page.locator('#view input[type=search]')).toBeVisible();
 }
 
 test.describe('Following people', () => {
@@ -99,6 +101,41 @@ test.describe('Following people', () => {
     await shot(page, testInfo, 'organizer-page');
     await expectNoGenericError(page);
     await anaCtx.close();
+  });
+
+  test('the search box stays on the Following tab, and searches it', async ({ page, browser }, testInfo) => {
+    await registerUI(page, uemail('searcher'), 'password123', 'Searcher');
+
+    // Two people I follow, doing things at differently-named projects.
+    for (const [name, project] of [['Ana Fields', 'Riverside Cleanup'], ['Ben Oduya', 'Food Bank Sorting']]) {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const other = await ctx.newPage();
+      await registerUI(other, uemail('doer'), 'password123', name);
+      const otherId = await myId(other);
+      await liveEvent(other, project + ' ' + uname());
+      await page.goto(`/#/u/${otherId}`);
+      await page.getByRole('button', { name: /^follow$/i }).click();
+      await expect(page.getByRole('button', { name: /following/i })).toBeVisible();
+      await ctx.close();
+    }
+
+    await openFollowing(page);
+    const search = page.locator('#view input[type=search]');
+    await expect(search).toBeVisible();                       // it did NOT disappear
+    await expect(search).toHaveAttribute('placeholder', /people and projects/i);
+    await expect(page.locator('.card.activity')).toHaveCount(2);
+    await shot(page, testInfo, 'following-with-search');
+
+    // Search by person…
+    await search.fill('Oduya');
+    await expect(page.locator('.card.activity', { hasText: 'Ben Oduya' })).toHaveCount(1);
+    await expect(page.locator('.card.activity', { hasText: 'Ana Fields' })).toHaveCount(0);
+
+    // …and by project.
+    await search.fill('Riverside');
+    await expect(page.locator('.card.activity', { hasText: 'Ana Fields' })).toHaveCount(1);
+    await shot(page, testInfo, 'searched');
+    await expectNoGenericError(page);
   });
 
   test('a blocked follower stays a follower and stops seeing me', async ({ page, browser }, testInfo) => {
