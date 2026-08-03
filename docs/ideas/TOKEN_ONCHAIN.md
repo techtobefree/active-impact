@@ -31,6 +31,7 @@ decisions, so they can be cited from code and from other docs.
 | **T9** | **The chain is for the BUSINESS, not the volunteer.** The burn record goes on-chain; volunteer balances stay in Postgres. No volunteer wallets, no keys for guests, no change to onboarding. | 2026-08-03 | The burn total is what a business is actually paid in (T5), and it is the only part that needs to be permanent and publicly checkable. Businesses can manage a wallet; a guest who has not even given us an email cannot, and guest-first onboarding is the best thing about the app. |
 | **T10** | **A real ERC-20, not just a burn log.** The token exists on-chain from day one, held custodially in one treasury address while T9 holds; mint on service, burn on redemption. | 2026-08-03 | *Optionality.* If we ever decide to mint directly to volunteers, it becomes a change of custody rather than a migration — the same contract, the same balances, the same burn totals, nothing ported. Starting with a burn log and upgrading later would mean carrying historical totals into a new contract, which forfeits the permanence that was the whole reason to be on a chain. It also makes T1 publicly legible: **total supply IS service done and not yet honoured**, readable by anyone without us reporting it. |
 | **T11** | **Claiming an offer settles immediately — accept/decline is removed.** The claimant claims, the price is taken, the quantity decrements, done. The poster's only control is withdrawing or bounding the listing. | 2026-08-03 | The shipped catalog (`OVERVIEW.md` **D9**) let a poster accept or decline each claim, which is the exact opposite of T6. This supersedes D9 for offers. **Note:** every offer in this app is already priced (0 = free), and needs are never claimable — so "token-priced offers" is all offers, and there is no subset to carve out. |
+| **T12** | **Redemption BURNS the price. It does not pay the business.** This is how tokens leave existence (T1) and it supersedes the shipped `transfer(claimant → poster)`. **How the burn is attributed to a business is still open — see Q2c.** | 2026-08-03 | *"It is a burn, we've decided that, this is how the tokens leave existence."* Paying the business would give them a balance to spend or tip onward, which contradicts T4, and would leave no burn total to publish — the number the whole model exists to produce. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -90,7 +91,7 @@ Supersedes `OVERVIEW.md` D9 for offers. When implemented, D9 must be edited
 rather than left to contradict T6 — a decision the design tree still asserts is
 worse than no decision at all.
 
-### Q2b. Does the price go TO the business, or out of existence?
+### Q2b. Does the price go TO the business, or out of existence? — ANSWERED by T12: it burns.
 
 **The second contradiction with shipped code, and the bigger one.** It touches the
 same lines as T11, which is why they should be settled together.
@@ -110,6 +111,39 @@ possession, and T1 says redemption is where tokens leave existence.
 
 Invariant I1 (`users.balance` = Σ in − Σ out) survives either way; a burn is
 simply an out-entry with no in.
+
+### Q2c. How is a burn attributed to a particular business? — OPEN
+
+The founder's three options, recorded with what each costs:
+
+| | How | Cost |
+|---|---|---|
+| **1. One burn address + events** | Everything burns to a single recognised address; an event names the business. | Circulating supply is obvious. Per-business totals require **indexing events** — a service to run and keep correct. |
+| **2. A burn address per business** | Each business gets its own sink address. | No indexing: read the address balance. But addresses must be generated, and **no indexer knows those addresses are burns**, so circulating supply looks wrong everywhere. |
+| **3. Counters in the contract** | `redeem(business, amount)` burns and increments `burnedFor[business]`. | One extra storage write. Per-business totals are a **contract call**, not an indexing job, and supply stays obvious. |
+
+**The recommendation, if it helps: option 3, with three refinements.**
+
+- **Use a real `_burn`, not a send to a dead address.** ERC-20 burning reduces
+  `totalSupply`, so `totalSupply()` *becomes* circulating supply — exactly T1,
+  readable with no subtraction and no special knowledge. Sending to `0x…dead`
+  leaves the tokens counted, which is precisely the "indexers won't know" problem
+  option 2 has. A true burn deletes that problem rather than managing it.
+- **Emit the event as well — they are not alternatives.** The counter answers
+  *"what is the total now?"* in one call with no infrastructure. The event answers
+  *"what happened, and when?"* Both are wanted; events cost little, and having
+  them means we are never *dependent* on an indexer for the headline number.
+- **Key the counter by the business's ADDRESS, and make the registry
+  enumerable.** A mapping cannot be listed — `burnedFor[x]` is readable only if
+  you already know `x`. T5's league table needs *all* businesses, so the registry
+  should hold an enumerable list. Otherwise the leaderboard, which is the product,
+  is the one thing you cannot build from the chain alone.
+
+Gas, so it is not a mystery: on Base a new counter slot is ~20k gas and an update
+~2.9k, which at typical Base prices is a fraction of a US cent. The founder's
+instinct that this is affordable is right by about three orders of magnitude.
+
+**Still undecided.** Nothing here is chosen; the burn itself (T12) is.
 
 ### Q3. Does quantity become mandatory, and is there a per-person cap?
 
