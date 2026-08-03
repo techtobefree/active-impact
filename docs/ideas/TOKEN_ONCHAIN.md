@@ -32,6 +32,7 @@ decisions, so they can be cited from code and from other docs.
 | **T10** | **A real ERC-20, not just a burn log.** The token exists on-chain from day one, held custodially in one treasury address while T9 holds; mint on service, burn on redemption. | 2026-08-03 | *Optionality.* If we ever decide to mint directly to volunteers, it becomes a change of custody rather than a migration — the same contract, the same balances, the same burn totals, nothing ported. Starting with a burn log and upgrading later would mean carrying historical totals into a new contract, which forfeits the permanence that was the whole reason to be on a chain. It also makes T1 publicly legible: **total supply IS service done and not yet honoured**, readable by anyone without us reporting it. |
 | **T11** | **Claiming an offer settles immediately — accept/decline is removed.** The claimant claims, the price is taken, the quantity decrements, done. The poster's only control is withdrawing or bounding the listing. | 2026-08-03 | The shipped catalog (`OVERVIEW.md` **D9**) let a poster accept or decline each claim, which is the exact opposite of T6. This supersedes D9 for offers. **Note:** every offer in this app is already priced (0 = free), and needs are never claimable — so "token-priced offers" is all offers, and there is no subset to carve out. |
 | **T12** | **Redemption BURNS the price. It does not pay the business.** This is how tokens leave existence (T1) and it supersedes the shipped `transfer(claimant → poster)`. **How the burn is attributed to a business is still open — see Q2c.** | 2026-08-03 | *"It is a burn, we've decided that, this is how the tokens leave existence."* Paying the business would give them a balance to spend or tip onward, which contradicts T4, and would leave no burn total to publish — the number the whole model exists to produce. |
+| **T13** | **There is no "business" account type. You burn FOR AN ADDRESS.** Anyone may receive burn credit; a business is just an address that happens to belong to a business. Names are claimed socially — the business tells people, publishes it, and we can show it — not granted by us. If there is no address, the tokens burn to nothing. | 2026-08-03 | *"I'm trying to remove all the barriers… you don't need to go get a business account and ask us pretty please."* Consistent with everything else here: guest-first, no email required, anyone can post a project. A gated business account would be the first place in the app where somebody has to ask permission. Address-as-identity is also the chain's own primitive, so no parallel id registry has to be kept in sync — and the record stops being captive to this platform, because another app burning to the same address adds to the same total. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -199,6 +200,40 @@ that must never change are kept apart from the parts that should be free to.
 Mint must therefore be able to target **any** address from day one, even though
 today it only ever targets the treasury. Otherwise the future T10 was bought to
 keep open is closed by an argument list.
+
+### Q3b. If names are permissionless, what stops impersonation? — OPEN
+
+**Created by T13, and the one place it has a sharp edge.** If a business is only
+an address and names are claimed socially, then name-claiming is unauthenticated:
+somebody labels their address "Starbucks", and *our* leaderboard is what displays
+it. Two addresses can also claim the same café.
+
+The fix does not require gatekeeping — it requires **proof instead of
+permission**, which is the same move option 3 made for burns:
+
+- **Domain proof.** The business publishes their address at a `.well-known` path
+  or a DNS TXT record on their own domain. Whoever controls `riversidecafe.com`
+  proves the pairing; we approve nothing.
+- **ENS.** The address has a name already; we display it. Self-service, exists
+  today, no gate.
+- **A signature.** Cheap, but only proves control of the *address* — not of the
+  *business name*, so it does not actually solve impersonation on its own.
+
+**And the display rule follows an idiom this app already has.** Show the claimed
+name, and mark whether it is **asserted** or **proven** — exactly the
+asserted-vs-attested distinction `CHECKIN_PROOF.md` already uses for presence.
+Anyone may claim; a proof upgrades it; nobody is ever refused. The concept is
+already in the product's vocabulary, so it costs no new idea.
+
+### Q3c. How does the leaderboard enumerate, with no registry to join? — OPEN
+
+**Also created by T13.** `burnedFor[address]` is readable only if you already know
+the address, and there is no registry anyone signs up to.
+
+Cheap answer that stays permissionless: the contract keeps an **append-only array
+of every address that has ever received burn credit**, pushed on that address's
+first burn. One extra ~20k-gas write per address, once, ever — and the league
+table remains buildable from the chain alone, with nobody joining anything.
 
 ### Q5. What stops fake service?
 
