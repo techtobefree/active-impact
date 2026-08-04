@@ -115,16 +115,18 @@ check(s == 200 and j.get("tokens_awarded") == 0, "checkout b -> 0 tokens (near-z
 s, j = call("POST", "/api/tokens/tip", token=tok_b, body={"to_email": A, "amount": 1})
 check(s == 409 and j.get("detail") == "insufficient_balance", "tip with empty wallet 409", (s, j))
 
-# 7. a posts a free offer; b claims; a accepts
+# 7. a posts a free offer; b claims it -- which settles it on the spot (T11)
 s, j = call("POST", "/api/catalog", token=tok_a, body={
     "kind": "offer", "title": "Free smoke muffins", "price_tokens": 0})
 check(s == 201 and j.get("id"), "post free offer", (s, j))
 item_id = j["id"]
 s, j = call("POST", f"/api/catalog/{item_id}/claim", token=tok_b)
-check(s == 201 and j.get("id"), "b claims offer", (s, j))
+check(s == 201 and j.get("status") == "redeemed" and j.get("decided_at"),
+      "b claims offer -> settled immediately", (s, j))
 claim_id = j["id"]
+# Nobody accepts anything any more: the endpoint is gone, not merely guarded.
 s, j = call("POST", f"/api/claims/{claim_id}/accept", token=tok_a)
-check(s == 200 and j.get("status") == "accepted", "a accepts claim", (s, j))
+check(s >= 400, "no accept endpoint survives", (s, j))
 
 # 8. auth wall
 s, j = call("GET", "/api/me")
