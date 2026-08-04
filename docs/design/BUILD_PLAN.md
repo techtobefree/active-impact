@@ -93,12 +93,12 @@ claim management, wallet claims section, tip-to-need wiring
 (`catalog_item_id`).
 
 - Tests: offer/need creation rules (price required on offers, forbidden on
-  needs); claim rules — needs/own/closed 409 per API.md, duplicate pending 409
-  (one live claim); accept → spend entry + quantity decrement + auto-close at 0
-  (I8, I10); accept with claimant-insufficient 409 leaves claim pending;
-  decline/cancel stamp `decided_at`, no tokens (I7); price-0 accept → no entry;
-  price edit doesn't touch existing claims' snapshot.
-- Verify: full offer→claim→accept loop and need→tip loop in browser.
+  needs); claim rules — needs/own/closed 409 per API.md; claim → burn entry with
+  **no payee** + quantity decrement + auto-close at 0 (I8, I10); claiming
+  without the tokens 409s and writes nothing at all (I9); price-0 claim → no
+  entry; price edit doesn't touch existing claims' snapshot; the accept/decline/
+  cancel routes are absent from the routing table (T11).
+- Verify: full offer→claim→burn loop and need→tip loop in browser.
 
 ## M6 — PWA polish & the live gate
 
@@ -126,7 +126,7 @@ in `docs/issues/`.
 - [ ] Register → post project → second account scans QR → waiver → agree →
       checkout → tokens appear in wallet — **on real phones**
 - [ ] Tip between the two accounts; ledger correct both sides
-- [ ] Post offer → claim → accept → tokens moved, quantity/closure correct
+- [ ] Post offer → claim → tokens burned (poster's balance unchanged), quantity/closure correct
 - [ ] Post need → tip from its page with item context in the ledger
 - [ ] Full pytest suite green; every DOMAIN.md invariant has at least one test
 - [ ] Backup cron installed; `backups/` receives a dump

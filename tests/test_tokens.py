@@ -70,6 +70,34 @@ def test_transfer_moves_tokens_and_conserves(register):
     assert _ledger_balance(a["id"]) == 6 and _ledger_balance(b["id"]) == 4   # I1
 
 
+def test_burn_destroys_tokens_with_no_recipient(register):
+    """T12: the out door. One debit, no credit -- the supply is smaller after."""
+    _ca, a, _ta = register("burna")
+    with db.tx() as c:
+        tokens.mint(c, a["id"], 10)
+    with db.tx() as c:
+        entry = tokens.burn(c, a["id"], 4)
+    assert entry["kind"] == "burn"
+    assert entry["from_user_id"] == a["id"] and entry["to_user_id"] is None
+    assert _balance(a["id"]) == 6
+    assert _ledger_balance(a["id"]) == 6   # I1: a burn is an out with no in
+    supply = db.query_one(
+        "SELECT COALESCE(SUM(CASE WHEN kind='earn' THEN amount ELSE -amount END),0) AS s "
+        "FROM token_entries WHERE kind IN ('earn','burn')")["s"]
+    assert int(supply) == 6                # I1b
+
+
+def test_burn_beyond_balance_changes_nothing(register):
+    _ca, a, _ta = register("burnb")
+    with db.tx() as c:
+        tokens.mint(c, a["id"], 3)
+    with pytest.raises(tokens.InsufficientBalance):
+        with db.tx() as c:
+            tokens.burn(c, a["id"], 5)     # I9, same guard as transfer
+    assert _balance(a["id"]) == 3
+    assert db.query_one("SELECT COUNT(*) AS c FROM token_entries WHERE kind='burn'")["c"] == 0
+
+
 def test_insufficient_balance_changes_nothing(register):
     _ca, a, _ta = register("ada")
     _cb, b, _tb = register("boo")

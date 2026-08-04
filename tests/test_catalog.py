@@ -1,12 +1,13 @@
 """Catalog items + claims: price rules, claim gating, settlement, invariants.
 
-Owns catalog invariants I7 (claim transitions + decided_at), I8 (accepted-with-
-price <-> exactly one 'spend' entry), I10 (only active in-quantity offers claim;
-quantity 0 -> closed). Touches I1 (balance == ledger sum after accept).
+Owns catalog invariants I7 (a claim is born settled and never transitions), I8
+(priced claim <-> exactly one 'burn' entry with no payee), I10 (only active
+in-quantity offers claim; quantity 0 -> closed). Touches I1 (balance == ledger
+sum) and I1b (supply = mints - burns).
 """
 import pytest
 
-from app import db, tokens
+from app import db, main, tokens
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -55,9 +56,9 @@ def test_create_offer_requires_price(register):
     item = _offer(ca, price=0, title="Free sticker")   # 0 is a valid free offer
     assert item["kind"] == "offer" and item["price_tokens"] == 0
     assert item["status"] == "active"
-    # my_claim / pending count present for the poster's own detail view
+    # my_claim / burn tally present for the poster's own detail view
     assert item["my_claim"] is None
-    assert item["pending_claims_count"] == 0
+    assert item["redeemed_count"] == 0 and item["burned_tokens"] == 0
 
 
 def test_offer_without_price_is_price_required(register):
@@ -135,20 +136,23 @@ def test_detail_404(register):
     assert ca.get("/api/catalog/9999").status_code == 404
 
 
-def test_detail_pending_count_poster_only(register):
+def test_detail_redeemed_count_poster_only(register):
     cp, p, _ = register("shopkeep")
     cc, c, _ = register("buyer")
     _fund(c["id"], 10)
     item = _offer(cp, price=2)
     cc.post(f"/api/catalog/{item['id']}/claim")
 
+    # The poster's number is what they gave away, not what they are owed (T5).
     poster_view = cp.get(f"/api/catalog/{item['id']}").json()
-    assert poster_view["pending_claims_count"] == 1
+    assert poster_view["redeemed_count"] == 1
+    assert poster_view["burned_tokens"] == 2
     assert poster_view["my_claim"] is None
 
     buyer_view = cc.get(f"/api/catalog/{item['id']}").json()
-    assert "pending_claims_count" not in buyer_view       # poster-only field
-    assert buyer_view["my_claim"]["status"] == "pending"
+    assert "redeemed_count" not in buyer_view             # poster-only field
+    assert "burned_tokens" not in buyer_view
+    assert buyer_view["my_claim"]["status"] == "redeemed"
 
 
 # ---- patch ------------------------------------------------------------------
@@ -178,15 +182,15 @@ def test_patch_price_does_not_touch_existing_claim(register):
     claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
     assert claim["price_tokens"] == 5
 
+    # Settlement already happened at the snapshot price (5), not the later one.
+    assert _balance(c["id"]) == 15
+
     # Poster raises the price AFTER the claim exists.
     cp.patch(f"/api/catalog/{item['id']}", json={"price_tokens": 10})
-    # Snapshot on the claim is unchanged.
+    # Snapshot on the claim is unchanged, and so is the balance it produced.
     still = cc.get(f"/api/catalog/{item['id']}").json()["my_claim"]
     assert still["price_tokens"] == 5
-
-    # Accept settles on the snapshot (5), not the new price (10).
-    cp.post(f"/api/claims/{claim['id']}/accept")
-    assert _balance(c["id"]) == 15 and _balance(p["id"]) == 5
+    assert _balance(c["id"]) == 15
 
 
 # ---- claim gating (I10) -----------------------------------------------------
@@ -215,201 +219,171 @@ def test_claim_closed_item(register):
     assert r.status_code == 409 and r.json()["detail"] == "item_closed"
 
 
-def test_claim_duplicate_pending(register):
-    cp, p, _ = register("dupshop")
-    cc, c, _ = register("dupbuyer")
-    _fund(c["id"], 10)
-    item = _offer(cp, price=1)
-    assert cc.post(f"/api/catalog/{item['id']}/claim").status_code == 201
-    r = cc.post(f"/api/catalog/{item['id']}/claim")
-    assert r.status_code == 409 and r.json()["detail"] == "already_claimed"
-
-
 def test_claim_missing_item_404(register):
     cc, c, _ = register("ghost")
     assert cc.post("/api/catalog/9999/claim").status_code == 404
 
 
-def test_cancel_frees_the_pending_slot(register):
-    cp, p, _ = register("reshop")
-    cc, c, _ = register("rebuyer")
+def test_claim_twice_is_two_redemptions(register):
+    """The old "one live claim per item" rule guarded the pending state. With no
+    pending state, redeeming twice is simply redeeming twice -- and it burns
+    twice. Quantity is the poster's bound, not a per-person cap."""
+    cp, p, _ = register("dupshop")
+    cc, c, _ = register("dupbuyer")
     _fund(c["id"], 10)
-    item = _offer(cp, price=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-    cc.post(f"/api/claims/{claim['id']}/cancel")
-    # The partial unique index only covers pending rows, so re-claiming works.
+    item = _offer(cp, price=1, quantity=3)
+    assert cc.post(f"/api/catalog/{item['id']}/claim").status_code == 201
     assert cc.post(f"/api/catalog/{item['id']}/claim").status_code == 201
 
+    assert _balance(c["id"]) == 8
+    assert db.query_one(
+        "SELECT COUNT(*) AS c FROM token_entries WHERE kind='burn' AND from_user_id=%s",
+        (c["id"],),
+    )["c"] == 2
+    it = db.query_one("SELECT quantity FROM catalog_items WHERE id=%s", (item["id"],))
+    assert it["quantity"] == 1
 
-# ---- accept settlement (I8, I10, I1) ----------------------------------------
 
-def test_accept_moves_one_spend_entry_and_closes_at_zero(register):
+def test_claim_without_the_tokens_is_refused_and_changes_nothing(register):
+    cp, p, _ = register("bigseller")
+    cc, c, _ = register("brokebuyer")
+    _fund(c["id"], 5)
+    item = _offer(cp, price=100, quantity=1)
+
+    r = cc.post(f"/api/catalog/{item['id']}/claim")
+    assert r.status_code == 409 and r.json()["detail"] == "insufficient_balance"
+
+    # No claim, no burn, no decrement: the whole tx rolled back (I9).
+    assert db.query_one("SELECT COUNT(*) AS c FROM catalog_claims")["c"] == 0
+    assert db.query_one("SELECT COUNT(*) AS c FROM token_entries WHERE kind='burn'")["c"] == 0
+    it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
+    assert it["quantity"] == 1 and it["status"] == "active"
+    assert _balance(c["id"]) == 5
+
+
+# ---- settlement happens AT the claim (T11) ----------------------------------
+
+def test_claim_burns_the_price_and_closes_at_zero(register):
     cp, p, _ = register("seller")
     cc, c, _ = register("payer")
     _fund(c["id"], 10)
     item = _offer(cp, price=3, quantity=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
 
-    r = cp.post(f"/api/claims/{claim['id']}/accept")
-    assert r.status_code == 200
+    r = cc.post(f"/api/catalog/{item['id']}/claim")
+    assert r.status_code == 201
     body = r.json()
-    assert body["status"] == "accepted" and body["decided_at"] is not None
+    # Born settled: no pending phase to pass through (T11).
+    assert body["status"] == "redeemed" and body["decided_at"] is not None
 
-    # Exactly one spend entry, tagged with the claim (I8).
-    spends = db.query(
-        "SELECT * FROM token_entries WHERE kind='spend' AND claim_id=%s", (claim["id"],)
+    # Exactly one burn entry, tagged with the claim, going NOWHERE (I8, T12).
+    burns = db.query(
+        "SELECT * FROM token_entries WHERE kind='burn' AND claim_id=%s", (body["id"],)
     )
-    assert len(spends) == 1
-    assert spends[0]["amount"] == 3
-    assert spends[0]["from_user_id"] == c["id"] and spends[0]["to_user_id"] == p["id"]
-    assert spends[0]["catalog_item_id"] == item["id"]
+    assert len(burns) == 1
+    assert burns[0]["amount"] == 3
+    assert burns[0]["from_user_id"] == c["id"]
+    assert burns[0]["to_user_id"] is None
+    assert burns[0]["catalog_item_id"] == item["id"]
 
     # Last unit consumed -> quantity 0 and item auto-closed (I10).
     it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
     assert it["quantity"] == 0 and it["status"] == "closed"
 
-    # Balances and I1.
-    assert _balance(c["id"]) == 7 and _balance(p["id"]) == 3
-    assert _ledger_balance(c["id"]) == 7 and _ledger_balance(p["id"]) == 3
+    # The claimant paid; the poster was NOT paid (T4).
+    assert _balance(c["id"]) == 7 and _balance(p["id"]) == 0
+    assert _ledger_balance(c["id"]) == 7 and _ledger_balance(p["id"]) == 0
 
 
-def test_accept_price_zero_no_ledger_entry(register):
+def test_burned_tokens_leave_circulation(register):
+    """I1b: supply is mints minus burns. A redemption shrinks the total -- it
+    does not move it sideways to the poster."""
+    cp, p, _ = register("shrink_poster")
+    cc, c, _ = register("shrink_buyer")
+    _fund(c["id"], 10)
+    item = _offer(cp, price=4)
+    cc.post(f"/api/catalog/{item['id']}/claim")
+
+    minted = db.query_one("SELECT COALESCE(SUM(amount),0) AS s FROM token_entries WHERE kind='earn'")["s"]
+    burned = db.query_one("SELECT COALESCE(SUM(amount),0) AS s FROM token_entries WHERE kind='burn'")["s"]
+    held = db.query_one("SELECT COALESCE(SUM(balance),0) AS s FROM users")["s"]
+    assert int(minted) == 10 and int(burned) == 4
+    assert int(held) == int(minted) - int(burned) == 6
+
+
+def test_claim_price_zero_no_ledger_entry(register):
     cp, p, _ = register("freebie")
     cc, c, _ = register("taker")
     item = _offer(cp, price=0, quantity=2)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
 
-    r = cp.post(f"/api/claims/{claim['id']}/accept")
-    assert r.status_code == 200 and r.json()["status"] == "accepted"
+    r = cc.post(f"/api/catalog/{item['id']}/claim")
+    assert r.status_code == 201 and r.json()["status"] == "redeemed"
 
-    # No token entry at all for a free offer.
+    # Nothing to burn, so no ledger row at all (I8).
     assert db.query_one("SELECT COUNT(*) AS c FROM token_entries")["c"] == 0
     # Quantity decremented but not exhausted -> still active.
     it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
     assert it["quantity"] == 1 and it["status"] == "active"
 
 
-def test_accept_unlimited_quantity_stays_open(register):
+def test_claim_unlimited_quantity_stays_open(register):
     cp, p, _ = register("unlim")
     cc, c, _ = register("unlimbuyer")
     item = _offer(cp, price=0)   # quantity None = unlimited
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-    cp.post(f"/api/claims/{claim['id']}/accept")
+    cc.post(f"/api/catalog/{item['id']}/claim")
     it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
     assert it["quantity"] is None and it["status"] == "active"
 
 
-def test_accept_insufficient_balance_leaves_claim_pending(register):
-    cp, p, _ = register("bigseller")
-    cc, c, _ = register("brokebuyer")
-    _fund(c["id"], 5)
-    item = _offer(cp, price=100, quantity=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-
-    r = cp.post(f"/api/claims/{claim['id']}/accept")
-    assert r.status_code == 409 and r.json()["detail"] == "insufficient_balance"
-
-    # Nothing moved; claim untouched; item not decremented (I9 spirit).
-    row = db.query_one("SELECT status, decided_at FROM catalog_claims WHERE id=%s", (claim["id"],))
-    assert row["status"] == "pending" and row["decided_at"] is None
-    it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
-    assert it["quantity"] == 1 and it["status"] == "active"
-    assert _balance(c["id"]) == 5 and _balance(p["id"]) == 0
-    assert db.query_one("SELECT COUNT(*) AS c FROM token_entries WHERE kind='spend'")["c"] == 0
-
-
-def test_accept_quantity_exhausted_on_second(register):
+def test_last_unit_goes_to_whoever_claims_first(register):
     cp, p, _ = register("oneseller")
     c1, u1, _ = register("firstbuyer")
     c2, u2, _ = register("secondbuyer")
     _fund(u1["id"], 10)
     _fund(u2["id"], 10)
     item = _offer(cp, price=1, quantity=1)
-    claim1 = c1.post(f"/api/catalog/{item['id']}/claim").json()
-    claim2 = c2.post(f"/api/catalog/{item['id']}/claim").json()
 
-    assert cp.post(f"/api/claims/{claim1['id']}/accept").status_code == 200
-    r = cp.post(f"/api/claims/{claim2['id']}/accept")
-    assert r.status_code == 409 and r.json()["detail"] == "quantity_exhausted"
+    assert c1.post(f"/api/catalog/{item['id']}/claim").status_code == 201
+    r = c2.post(f"/api/catalog/{item['id']}/claim")
+    assert r.status_code == 409 and r.json()["detail"] == "item_closed"
+    # The one who missed out kept their tokens.
+    assert _balance(u1["id"]) == 9 and _balance(u2["id"]) == 10
 
 
-def test_accept_permissions_and_state(register):
-    cp, p, _ = register("acc_poster")
-    cc, c, _ = register("acc_claimant")
-    cx, x, _ = register("acc_stranger")
+def test_the_poster_has_no_veto(register):
+    """T6/T11: a listing is binding until withdrawn, so the endpoints that let a
+    poster stand in the way are gone -- not merely unused."""
+    cp, p, _ = register("veto_poster")
+    cc, c, _ = register("veto_claimant")
     _fund(c["id"], 10)
     item = _offer(cp, price=2, quantity=1)
     claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
 
-    # Only the poster may accept.
-    assert cx.post(f"/api/claims/{claim['id']}/accept").status_code == 403
-    assert cc.post(f"/api/claims/{claim['id']}/accept").status_code == 403
-    # Missing claim.
-    assert cp.post("/api/claims/9999/accept").status_code == 404
-    # Accept once, then re-accept -> claim_not_pending.
-    assert cp.post(f"/api/claims/{claim['id']}/accept").status_code == 200
-    r = cp.post(f"/api/claims/{claim['id']}/accept")
-    assert r.status_code == 409 and r.json()["detail"] == "claim_not_pending"
+    # Gone from the routing table, not merely guarded. (The HTTP call answers
+    # 405: an unknown POST falls through to the static mount, which serves GET.)
+    routes = {r.path for r in main.app.routes if hasattr(r, "path")}
+    assert not [p for p in routes if p.endswith(("/accept", "/decline", "/cancel"))]
+    for verb, client in (("accept", cp), ("decline", cp), ("cancel", cc)):
+        assert client.post(f"/api/claims/{claim['id']}/{verb}").status_code >= 400
+
+    # Withdrawing the listing is the poster's real power, and it is forward-only.
+    assert cp.patch(f"/api/catalog/{item['id']}", json={"status": "closed"}).status_code == 200
+    row = db.query_one("SELECT status FROM catalog_claims WHERE id=%s", (claim["id"],))
+    assert row["status"] == "redeemed"
 
 
-# ---- decline / cancel (I7) --------------------------------------------------
-
-def test_decline_stamps_decided_at_no_tokens(register):
-    cp, p, _ = register("decliner")
-    cc, c, _ = register("declined")
+def test_claims_are_never_updated(register):
+    """I7: one row, written once. decided_at is stamped at insert."""
+    cp, p, _ = register("imm_poster")
+    cc, c, _ = register("imm_claimant")
     _fund(c["id"], 10)
-    item = _offer(cp, price=4, quantity=1)
+    item = _offer(cp, price=1, quantity=2)
     claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-    assert claim["decided_at"] is None
-
-    r = cp.post(f"/api/claims/{claim['id']}/decline")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "declined" and body["decided_at"] is not None
-
-    # No tokens moved; item untouched (I7 + no ledger entry).
-    assert db.query_one("SELECT COUNT(*) AS c FROM token_entries")["c"] == 1  # only the mint fund
-    it = db.query_one("SELECT quantity, status FROM catalog_items WHERE id=%s", (item["id"],))
-    assert it["quantity"] == 1 and it["status"] == "active"
-    assert _balance(c["id"]) == 10 and _balance(p["id"]) == 0
-
-
-def test_cancel_stamps_decided_at_no_tokens(register):
-    cp, p, _ = register("cxl_poster")
-    cc, c, _ = register("canceller")
-    _fund(c["id"], 10)
-    item = _offer(cp, price=4, quantity=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-
-    r = cc.post(f"/api/claims/{claim['id']}/cancel")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "canceled" and body["decided_at"] is not None
-    assert db.query_one("SELECT COUNT(*) AS c FROM token_entries WHERE kind='spend'")["c"] == 0
-    assert _balance(c["id"]) == 10 and _balance(p["id"]) == 0
-
-
-def test_decline_permissions_and_state(register):
-    cp, p, _ = register("dec_poster")
-    cc, c, _ = register("dec_claimant")
-    item = _offer(cp, price=0, quantity=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-    # Claimant cannot decline (poster action).
-    assert cc.post(f"/api/claims/{claim['id']}/decline").status_code == 403
-    assert cp.post(f"/api/claims/{claim['id']}/decline").status_code == 200
-    # Re-decline -> claim_not_pending.
-    assert cp.post(f"/api/claims/{claim['id']}/decline").status_code == 409
-
-
-def test_cancel_permissions_and_state(register):
-    cp, p, _ = register("can_poster")
-    cc, c, _ = register("can_claimant")
-    item = _offer(cp, price=0, quantity=1)
-    claim = cc.post(f"/api/catalog/{item['id']}/claim").json()
-    # Poster cannot cancel (claimant action).
-    assert cp.post(f"/api/claims/{claim['id']}/cancel").status_code == 403
-    assert cc.post(f"/api/claims/{claim['id']}/cancel").status_code == 200
-    assert cc.post(f"/api/claims/{claim['id']}/cancel").status_code == 409
+    row = db.query_one(
+        "SELECT status, created_at, decided_at FROM catalog_claims WHERE id=%s",
+        (claim["id"],),
+    )
+    assert row["status"] == "redeemed"
+    assert row["decided_at"] == row["created_at"]
 
 
 # ---- claims list ------------------------------------------------------------
@@ -436,7 +410,6 @@ def test_list_claims_by_role(register):
     # Poster has no claims as a claimant.
     assert cp.get("/api/claims").json() == []
 
-    # Status filter.
-    cp.post(f"/api/claims/{claim['id']}/accept")
-    assert cc.get("/api/claims?status=pending").json() == []
-    assert len(cc.get("/api/claims?status=accepted").json()) == 1
+    # Status filter. Only one state is written now; the others read back empty.
+    assert len(cc.get("/api/claims?status=redeemed").json()) == 1
+    assert cc.get("/api/claims?status=canceled").json() == []

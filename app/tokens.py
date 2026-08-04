@@ -1,8 +1,12 @@
 """Impact-token ledger -- the sacred core.
 
 This module is the ONLY code permitted to write token_entries or users.balance
-(invariant I2). Every movement goes through mint() or transfer(), each called
-inside a db.tx() so the ledger row and the balance update commit together.
+(invariant I2). Every movement goes through mint(), transfer() or burn(), each
+called inside a db.tx() so the ledger row and the balance update commit together.
+
+The token has exactly two doors: it is minted for service and burned on
+redemption (TOKEN_ONCHAIN.md T1). transfer() is not a door -- a tip hands one
+between people without changing how many exist.
 
 See docs/design/DOMAIN.md § Token accounting.
 """
@@ -21,7 +25,7 @@ TOKENS_PER_HOUR = 1
 
 
 class InsufficientBalance(Exception):
-    """Raised by transfer() when the sender cannot cover the amount (-> 409)."""
+    """Raised by transfer()/burn() when the payer cannot cover the amount (-> 409)."""
 
 
 # ---- checkout math (half-up integers; NEVER Python round(), which is banker's) ----
@@ -50,21 +54,50 @@ def mint(c, to_user_id: int, amount: int, participation_id: int | None = None,
     ).fetchone()
 
 
-def transfer(c, from_user_id: int, to_user_id: int, amount: int, kind: str,
-             claim_id: int | None = None, catalog_item_id: int | None = None,
-             note: str | None = None) -> dict:
-    """user -> user (kind 'tip' | 'spend'). Atomic overdraft guard on the debit."""
+def _debit(c, from_user_id: int, amount: int) -> None:
+    """Take tokens off a balance, or refuse. The guard is the WHERE clause: only
+    the statement that matches a row has taken anything, so two concurrent
+    spenders of the same last token cannot both win."""
     debited = c.execute(
         "UPDATE users SET balance = balance - %s WHERE id = %s AND balance >= %s RETURNING id",
         (amount, from_user_id, amount),
     ).fetchone()
     if not debited:
         raise InsufficientBalance()
+
+
+def transfer(c, from_user_id: int, to_user_id: int, amount: int, kind: str,
+             claim_id: int | None = None, catalog_item_id: int | None = None,
+             note: str | None = None) -> dict:
+    """user -> user (kind 'tip'). Supply is unchanged; it just changes hands.
+
+    ('spend' remains readable in old rows: before T12, redeeming an offer paid
+    the poster. It burns now, so nothing writes that kind any more.)
+    """
+    _debit(c, from_user_id, amount)
     c.execute("UPDATE users SET balance = balance + %s WHERE id = %s", (amount, to_user_id))
     return c.execute(
         "INSERT INTO token_entries(from_user_id, to_user_id, amount, kind, claim_id, catalog_item_id, note) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *",
         (from_user_id, to_user_id, amount, kind, claim_id, catalog_item_id, note),
+    ).fetchone()
+
+
+def burn(c, from_user_id: int, amount: int, claim_id: int | None = None,
+         catalog_item_id: int | None = None, note: str | None = None) -> dict:
+    """user -> nobody (kind 'burn'). The tokens stop existing (T12).
+
+    Deliberately NOT transfer(to_user_id=poster): the poster is credited with the
+    deed, never the tokens (T4). Paying them would recycle the token and let one
+    hour of service be honoured twice -- and then outstanding supply would no
+    longer mean "service done, not yet honoured", which is the only thing it is
+    for. There is no credit half of this function, and there must never be one.
+    """
+    _debit(c, from_user_id, amount)
+    return c.execute(
+        "INSERT INTO token_entries(from_user_id, to_user_id, amount, kind, claim_id, catalog_item_id, note) "
+        "VALUES (%s, NULL, %s, 'burn', %s, %s, %s) RETURNING *",
+        (from_user_id, amount, claim_id, catalog_item_id, note),
     ).fetchone()
 
 
@@ -113,7 +146,12 @@ def do_checkout(c, participation: dict, actor_user_id: int | None = None) -> dic
 # ---- API ----
 
 def entry_out(entry: dict, me_id: int) -> dict:
-    """Ledger row from a viewer's perspective (direction + resolved counterparty)."""
+    """Ledger row from a viewer's perspective (direction + resolved counterparty).
+
+    A burn falls out correctly without a special case: no recipient means it is
+    never "in", and the counterparty resolves to null because there genuinely
+    isn't one. The client names the item instead.
+    """
     direction = "in" if entry["to_user_id"] == me_id else "out"
     other = entry["from_user_id"] if direction == "in" else entry["to_user_id"]
     return {

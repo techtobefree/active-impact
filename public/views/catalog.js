@@ -1,7 +1,7 @@
 // Catalog: offers|needs list, create (offer/need), detail with role-aware actions.
 import { api, apiBlobURL, currentUser } from '../api.js';
 import {
-  el, esc, mount, clear, spinner, emptyState, statusPill,
+  el, esc, mount, clear, spinner, emptyState, statusPill, fmtDate,
   addForm, imagesStrip, toast, toastErr, errMessage,
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
@@ -147,7 +147,7 @@ export async function newView() {
     offerBtn.classList.toggle('primary', kind === 'offer');
     needBtn.classList.toggle('primary', kind === 'need');
     helper.textContent = kind === 'offer'
-      ? 'Set a token price (0 = free). Claimants pay you when you accept.'
+      ? 'Set a token price (0 = free). Claiming is instant, and the tokens are retired — you receive the record, not the tokens.'
       : 'People can tip you tokens from your post.';
 
     // Toggling offer/need rebuilds the form — carry the user's text across.
@@ -231,8 +231,16 @@ export async function detailView(id) {
   wrap.append(head);
 
   if (isPoster) {
-    // Pending claims (loaded async below)
-    wrap.append(el('<div class="section-label">Pending claims</div>'));
+    // What this listing has honoured. Nothing to act on — a claim is already
+    // settled by the time it appears here (T11).
+    wrap.append(el('<div class="section-label">Redeemed</div>'));
+    if (detail.redeemed_count) {
+      wrap.append(el(
+        `<div class="card"><strong>${esc(detail.burned_tokens)} 🪙 retired</strong> across `
+        + `${esc(detail.redeemed_count)} redemption${detail.redeemed_count === 1 ? '' : 's'}`
+        + '<div class="small muted">Tokens claimants earned through service, spent here and taken out of circulation.</div></div>'
+      ));
+    }
     const claimsBox = el('<div class="stack"></div>');
     wrap.append(claimsBox);
 
@@ -297,53 +305,32 @@ async function fillClaims(box, itemId) {
   clear(box);
   box.append(spinner());
   try {
-    const claims = await api('/claims?role=poster&status=pending');
+    const claims = await api('/claims?role=poster&status=redeemed');
     const mine = (claims || []).filter((c) => c.item_id === Number(itemId));
     clear(box);
     if (!mine.length) {
-      box.append(el('<p class="muted small">No pending claims yet.</p>'));
+      box.append(el('<p class="muted small">Nobody has redeemed this yet.</p>'));
       return;
     }
-    for (const claim of mine) box.append(pendingClaimRow(claim));
+    for (const claim of mine) box.append(redemptionRow(claim));
   } catch (e) {
     clear(box);
     box.append(el(`<p class="muted small">${esc(errMessage(e))}</p>`));
   }
 }
 
-function pendingClaimRow(claim) {
+// A record, not a decision: who took it and what it cost them. There are no
+// buttons here on purpose — the poster has nothing left to approve (T6).
+function redemptionRow(claim) {
   const row = el('<div class="card row wrap"></div>');
   const c = claim.claimant || {};
   const info = el('<div class="grow"></div>');
   info.append(el(`<div><a href="#/u/${esc(c.id)}">${esc(c.display_name)}</a></div>`));
-  info.append(el(`<div class="small muted">${esc('wants this for ' + (claim.price_tokens === 0 ? 'free' : claim.price_tokens + ' 🪙'))}</div>`));
+  info.append(el(`<div class="small muted">${esc(
+    claim.price_tokens === 0 ? 'took this for free' : 'retired ' + claim.price_tokens + ' 🪙 for this'
+  )}</div>`));
   row.append(info);
-
-  const accept = el('<button class="act primary">Accept</button>');
-  accept.onclick = async () => {
-    accept.disabled = true;
-    try {
-      await api(`/claims/${claim.id}/accept`, { method: 'POST' });
-      toast('Claim accepted');
-      await refreshMe();
-      refresh();
-    } catch (e) {
-      if (e && e.detail === 'insufficient_balance') { accept.disabled = false; toast("Claimant doesn't have enough tokens yet"); }
-      else { toastErr(e); if (e && e.status === 409) refresh(); else accept.disabled = false; }
-    }
-  };
-
-  const decline = el('<button class="act">Decline</button>');
-  decline.onclick = async () => {
-    decline.disabled = true;
-    try {
-      await api(`/claims/${claim.id}/decline`, { method: 'POST' });
-      toast('Claim declined');
-      refresh();
-    } catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else decline.disabled = false; }
-  };
-
-  row.append(accept, decline);
+  if (claim.decided_at) row.append(el(`<div class="small muted">${esc(fmtDate(claim.decided_at))}</div>`));
   return row;
 }
 
@@ -351,37 +338,43 @@ function offerViewerCard(id, detail) {
   const card = el('<div class="card stack"></div>');
   const mc = detail.my_claim;
 
-  if (mc && mc.status === 'pending') {
-    card.append(el(`<p>Your claim ${statusPill('pending')}</p>`));
-    const cancel = el('<button class="act block">Cancel claim</button>');
-    cancel.onclick = async () => {
-      cancel.disabled = true;
-      try { await api(`/claims/${mc.id}/cancel`, { method: 'POST' }); toast('Claim canceled'); refresh(); }
-      catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else cancel.disabled = false; }
-    };
-    card.append(cancel);
-    return card;
-  }
-
-  if (mc && mc.status === 'accepted') {
-    card.append(el(`<p>Your claim ${statusPill('accepted')}</p>`));
+  // A claim is settled the moment it exists, so this is proof — never a wait.
+  if (mc && mc.status === 'redeemed') {
+    card.append(el(`<p>Redeemed ${statusPill('redeemed')} <span class="small muted">${esc(fmtDate(mc.decided_at || mc.created_at))}</span></p>`));
     card.append(el('<div class="banner info">✅ Show this screen as proof.</div>'));
+    if (mc.price_tokens > 0) {
+      card.append(el(`<p class="small muted">${esc(mc.price_tokens)} 🪙 retired — those tokens are out of circulation for good.</p>`));
+    }
+  } else if (mc) {
+    // Pre-T11 history: a claim someone declined or the claimant called off.
+    card.append(el(`<p class="muted small">Your last claim ${statusPill(mc.status)}</p>`));
+  }
+
+  if (detail.status !== 'active') {
+    if (!mc) card.append(el('<p class="muted">This listing is closed.</p>'));
     return card;
   }
 
-  // No live claim (none, declined, or canceled).
-  if (mc) card.append(el(`<p class="muted small">Your last claim ${statusPill(mc.status)}</p>`));
-  if (detail.status === 'active') {
-    const label = detail.price_tokens === 0 ? 'Claim (free)' : `Claim (${detail.price_tokens} 🪙)`;
-    const claim = el(`<button class="act primary block">${esc(label)}</button>`);
-    claim.onclick = async () => {
-      claim.disabled = true;
-      try { await api(`/catalog/${id}/claim`, { method: 'POST' }); toast('Claim sent'); refresh(); }
-      catch (e) { toastErr(e); if (e && e.status === 409) refresh(); else claim.disabled = false; }
-    };
-    card.append(claim);
-  } else {
-    card.append(el('<p class="muted">This listing is closed.</p>'));
+  const free = detail.price_tokens === 0;
+  const label = free ? 'Claim (free)' : `Claim for ${detail.price_tokens} 🪙`;
+  const claim = el(`<button class="act primary block">${esc(label)}</button>`);
+  claim.onclick = async () => {
+    // Irreversible and immediate: say so before taking the tokens, not after.
+    if (!free && !confirm(`Claim this for ${detail.price_tokens} 🪙?\n\nThe tokens are retired straight away — this cannot be undone.`)) return;
+    claim.disabled = true;
+    try {
+      await api(`/catalog/${id}/claim`, { method: 'POST' });
+      toast(free ? 'Claimed' : `Claimed — ${detail.price_tokens} 🪙 retired`);
+      await refreshMe();        // the balance in the app bar just changed
+      refresh();
+    } catch (e) {
+      if (e && e.detail === 'insufficient_balance') { claim.disabled = false; toast("You don't have enough tokens yet"); }
+      else { toastErr(e); if (e && e.status === 409) refresh(); else claim.disabled = false; }
+    }
+  };
+  card.append(claim);
+  if (mc && mc.status === 'redeemed') {
+    card.append(el('<p class="small muted">Claiming again retires more tokens while any are left.</p>'));
   }
   return card;
 }

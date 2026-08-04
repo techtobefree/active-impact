@@ -46,6 +46,8 @@ export function avatarEl(user, big = false) {
 // ---- status pills ----
 const PILL = {
   open: 'green', active: 'green', completed: 'muted', closed: 'red',
+  redeemed: 'green',
+  // Pre-T11 claim states. Nothing writes these any more; old rows still render.
   pending: 'amber', accepted: 'green', declined: 'red', canceled: 'muted',
 };
 export function statusPill(status) {

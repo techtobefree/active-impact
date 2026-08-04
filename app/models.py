@@ -396,7 +396,7 @@ class TokenEntry(Base):
     __tablename__ = "token_entries"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     from_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # NULL = system mint
-    to_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    to_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))    # NULL = burned
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     participation_id: Mapped[int | None] = mapped_column(ForeignKey("participations.id", ondelete="SET NULL"))
@@ -406,7 +406,10 @@ class TokenEntry(Base):
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_pos"),
-        CheckConstraint("kind IN ('earn', 'tip', 'spend')", name="kind_valid"),
+        # 'spend' is pre-T12 history: redemption burns now, it does not pay.
+        CheckConstraint("kind IN ('earn', 'tip', 'spend', 'burn')", name="kind_valid"),
+        # The token's two doors: no payer means minted, no payee means burned.
+        CheckConstraint("(kind = 'burn') = (to_user_id IS NULL)", name="burn_has_no_payee"),
         Index("idx_entries_to", "to_user_id", "id"),
         Index("idx_entries_from", "from_user_id", "id"),
     )
@@ -443,15 +446,14 @@ class CatalogClaim(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("catalog_items.id", ondelete="CASCADE"), nullable=False)
     claimant_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     price_tokens: Mapped[int] = mapped_column(Integer, nullable=False)  # snapshot at claim time
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="redeemed")
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(TS)
     __table_args__ = (
         CheckConstraint("price_tokens >= 0", name="price_nonneg"),
-        CheckConstraint("status IN ('pending', 'accepted', 'declined', 'canceled')", name="status_valid"),
-        # One live claim per (item, claimant).
-        Index("idx_claims_pending", "item_id", "claimant_id",
-              unique=True, postgresql_where=text("status = 'pending'")),
+        # Inserted 'redeemed' and never updated (T11). The other two are pre-T11
+        # history, kept readable; no code writes them.
+        CheckConstraint("status IN ('redeemed', 'declined', 'canceled')", name="status_valid"),
         Index("idx_claims_claimant", "claimant_id"),
         Index("idx_claims_item", "item_id"),
     )

@@ -1,5 +1,22 @@
 const { test, expect } = require('@playwright/test');
-const { shot, expectNoGenericError, registerUI, logoutUI, uname, uemail } = require('../helpers');
+const { shot, expectNoGenericError, registerUI, loginUI, logoutUI, uname, uemail } = require('../helpers');
+
+// Post an offer, then claim it. Claiming settles on the spot (T11) and the
+// price is destroyed rather than paid to the poster (T12).
+
+async function postOffer(page, title, price) {
+  await page.goto('/#/catalog/new');
+  await page.locator('input[name=title]').fill(title);
+  await page.locator('textarea[name=description]').fill('Fresh muffins, pickup downtown.');
+  await page.locator('input[name=price_tokens]').fill(String(price));
+  await page.getByRole('button', { name: /^post$/i }).click();
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
+}
+
+function balanceOf(page) {
+  return page.locator('#balance').textContent()
+    .then((t) => parseInt((t || '').replace(/\D/g, ''), 10) || 0);
+}
 
 test.describe('Catalog', () => {
   test('post an offer; a second user finds and claims it', async ({ page }, testInfo) => {
@@ -28,9 +45,64 @@ test.describe('Catalog', () => {
     await shot(page, testInfo, 'catalog-list-buyer');
     await card.click();
     await shot(page, testInfo, 'offer-detail-buyer');
+    // No waiting on anybody: the claim is settled the moment it is made.
     await page.getByRole('button', { name: /claim/i }).click();
-    await expect(page.getByText(/pending/i)).toBeVisible();
-    await shot(page, testInfo, 'claim-pending');
+    await expect(page.getByText(/redeemed/i).first()).toBeVisible();
+    await expect(page.getByText(/show this screen as proof/i)).toBeVisible();
+    await shot(page, testInfo, 'claim-redeemed');
+    await expectNoGenericError(page);
+  });
+
+  test('claiming a priced offer burns the tokens — the poster is not paid', async ({ page }, testInfo) => {
+    const title = 'E2E Bike Tune ' + uname('t');
+
+    // A poster with an empty wallet, so "still zero" at the end means something.
+    const posterEmail = uemail('burnsell');
+    await registerUI(page, posterEmail, 'password123', 'Burn Seller');
+    await page.goto('/#/wallet');
+    await expect(page.getByText(/your balance/i)).toBeVisible();
+    expect(await balanceOf(page)).toBe(0);
+    await postOffer(page, title, 1);
+    const itemUrl = page.url();
+
+    // A funded claimant (seeded by scripts/seed.py). Skips cleanly if absent.
+    await logoutUI(page);
+    await loginUI(page, 'ana@example.com');
+    await page.waitForTimeout(700);
+    const signedIn = await page.locator('#nav').isVisible().catch(() => false);
+    test.skip(!signedIn, 'seed data (ana@example.com) not present — run: python scripts/seed.py');
+    await page.goto('/#/wallet');
+    await expect(page.getByText(/your balance/i)).toBeVisible();
+    const before = await balanceOf(page);
+    test.skip(before < 1, 'seeded user ana has no tokens left — re-run: python scripts/seed.py');
+
+    // The burn is irreversible, so the app says so before doing it.
+    await page.goto(itemUrl);
+    page.once('dialog', (d) => {
+      expect(d.message()).toMatch(/retired straight away|cannot be undone/i);
+      d.accept();
+    });
+    await page.getByRole('button', { name: /claim for 1/i }).click();
+    await expect(page.getByText(/show this screen as proof/i)).toBeVisible();
+    await shot(page, testInfo, 'priced-claim-redeemed');
+
+    // The claimant paid, and the ledger names no recipient — because there isn't one.
+    await expect(page.locator('#balance')).toHaveText('🪙 ' + (before - 1));
+    await page.goto('/#/wallet');
+    await expect(page.getByText(/retired — out of circulation/i).first()).toBeVisible();
+    await shot(page, testInfo, 'ledger-burn-row');
+    await expectNoGenericError(page);
+
+    // The poster is credited with the deed, not the tokens.
+    await logoutUI(page);
+    await loginUI(page, posterEmail);
+    await page.goto('/#/wallet');
+    await expect(page.getByText(/your balance/i)).toBeVisible();
+    expect(await balanceOf(page)).toBe(0);
+    await page.goto(itemUrl);
+    await expect(page.getByText(/1 🪙 retired/i).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(accept|decline)$/i })).toHaveCount(0);
+    await shot(page, testInfo, 'poster-sees-the-record-not-the-tokens');
     await expectNoGenericError(page);
   });
 

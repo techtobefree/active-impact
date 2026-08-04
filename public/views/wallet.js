@@ -1,4 +1,4 @@
-// Wallet: balance hero, tip form, ledger, and both sides of my claims.
+// Wallet: balance hero, tip form, ledger, and what I have redeemed.
 import { api, currentUser } from '../api.js';
 import {
   el, esc, mount, addForm, statusPill, emptyState, spinner,
@@ -6,19 +6,23 @@ import {
 } from '../ui.js';
 import { refresh, refreshMe } from '../app.js';
 
-// A small kind chip for a ledger row (earn/tip/spend), colored like a pill.
+// A small kind chip for a ledger row (earn/tip/burn), colored like a pill.
 function kindChip(kind) {
   const cls = kind === 'earn' ? 'green' : kind === 'tip' ? 'amber' : 'muted';
   return `<span class="pill ${cls}">${esc(kind)}</span>`;
 }
 
 // One ledger row: direction arrow + amount, kind chip, counterparty, note, time.
+// A burn has no counterparty at all — the tokens went out of existence, so the
+// row says that rather than naming an innocent bystander as the recipient.
 function ledgerRow(e) {
   const inbound = e.direction === 'in';
   const cp = e.counterparty;
   const who = cp
     ? `<a href="#/u/${esc(cp.id)}">${esc(cp.display_name)}</a>`
-    : '<span class="muted">system</span>';
+    : e.kind === 'burn'
+      ? '<span class="muted">retired — out of circulation</span>'
+      : '<span class="muted">system</span>';
   const note = e.note ? `<div class="muted small">${esc(e.note)}</div>` : '';
   const amtColor = inbound ? 'var(--green)' : 'var(--red)';
   return el(`<div class="card row" style="align-items:flex-start">
@@ -31,86 +35,35 @@ function ledgerRow(e) {
   </div>`);
 }
 
-// My outgoing request on someone else's offer (claimant view).
+// Something I redeemed (claimant view). Settled on arrival, so there is nothing
+// to chase and nothing to cancel — the row is a receipt (T11).
 function myClaimRow(c) {
   const item = c.item || {};
-  const row = el(`<div class="card row" style="align-items:flex-start">
+  return el(`<div class="card row" style="align-items:flex-start">
     <div class="grow">
       <div><a href="#/catalog/${esc(item.id)}">${esc(item.title || 'Item')}</a></div>
-      <div class="muted small">${esc(c.price_tokens)} 🪙</div>
+      <div class="muted small">${c.price_tokens === 0 ? 'free' : esc(c.price_tokens) + ' 🪙 retired'}${c.decided_at ? ' · ' + esc(fmtDateTime(c.decided_at)) : ''}</div>
     </div>
     <div class="stack center" style="gap:.4rem">${statusPill(c.status)}</div>
   </div>`);
-  if (c.status === 'pending') {
-    const actions = row.querySelector('.stack');
-    const cancel = el('<button class="act del small">Cancel</button>');
-    cancel.onclick = async () => {
-      cancel.disabled = true;
-      try {
-        await api(`/claims/${c.id}/cancel`, { method: 'POST' });
-        toast('Request canceled');
-        refresh();
-      } catch (ex) {
-        toastErr(ex);
-        // A 409 means the claim changed under us — re-render reality, don't
-        // leave a dead button that repeats the same error forever.
-        if (ex && ex.status === 409) refresh(); else cancel.disabled = false;
-      }
-    };
-    actions.append(cancel);
-  }
-  return row;
 }
 
-// A pending request on one of my own items (poster view): Accept / Decline.
+// Somebody redeeming one of my own items (poster view). No buttons: I cannot
+// refuse a claim on a listing I have not withdrawn (T6), and the tokens are
+// already gone rather than owed to me (T4).
 function incomingRow(c) {
   const item = c.item || {};
   const claimant = c.claimant;
   const who = claimant
     ? `<a href="#/u/${esc(claimant.id)}">${esc(claimant.display_name)}</a>`
     : '<span class="muted">someone</span>';
-  const row = el(`<div class="card stack">
-    <div class="row" style="align-items:flex-start">
-      <div class="grow">
-        <div><a href="#/catalog/${esc(item.id)}">${esc(item.title || 'Item')}</a></div>
-        <div class="muted small">from <span>${who}</span> · ${esc(c.price_tokens)} 🪙</div>
-      </div>
-      ${statusPill(c.status)}
+  return el(`<div class="card row" style="align-items:flex-start">
+    <div class="grow">
+      <div><a href="#/catalog/${esc(item.id)}">${esc(item.title || 'Item')}</a></div>
+      <div class="muted small">${who} · ${c.price_tokens === 0 ? 'free' : esc(c.price_tokens) + ' 🪙 retired'}${c.decided_at ? ' · ' + esc(fmtDateTime(c.decided_at)) : ''}</div>
     </div>
+    <div class="stack center" style="gap:.4rem">${statusPill(c.status)}</div>
   </div>`);
-
-  const bar = el('<div class="row"></div>');
-  const accept = el('<button class="act primary grow">Accept</button>');
-  const decline = el('<button class="act grow">Decline</button>');
-  const busy = (on) => { accept.disabled = on; decline.disabled = on; };
-  accept.onclick = async () => {
-    busy(true);
-    try {
-      await api(`/claims/${c.id}/accept`, { method: 'POST' });
-      toast('Accepted 🎁');
-      await refreshMe();
-      refresh();
-    } catch (ex) {
-      // "Not enough tokens" here would read as the POSTER's balance — clarify.
-      if (ex && ex.detail === 'insufficient_balance') toast("The claimant doesn't have enough tokens yet.");
-      else toastErr(ex);
-      if (ex && ex.status === 409 && ex.detail !== 'insufficient_balance') refresh(); else busy(false);
-    }
-  };
-  decline.onclick = async () => {
-    busy(true);
-    try {
-      await api(`/claims/${c.id}/decline`, { method: 'POST' });
-      toast('Declined');
-      refresh();
-    } catch (ex) {
-      toastErr(ex);
-      if (ex && ex.status === 409) refresh(); else busy(false);
-    }
-  };
-  bar.append(accept, decline);
-  row.append(bar);
-  return row;
 }
 
 function label(text) { return el(`<div class="section-label">${esc(text)}</div>`); }
@@ -126,7 +79,7 @@ export async function walletView() {
     [ledger, mine, incoming] = await Promise.all([
       api('/tokens/ledger'),
       api('/claims?role=claimant'),
-      api('/claims?role=poster&status=pending'),
+      api('/claims?role=poster'),
     ]);
   } catch (e) {
     if (e && e.detail === 'unauthorized') throw e; // app.js already redirected
@@ -166,15 +119,15 @@ export async function walletView() {
     ? ledger.map(ledgerRow)
     : [emptyState('Nothing in your ledger yet — volunteer an hour to earn your first token.')];
 
-  // ---- my requests (claimant) ----
+  // ---- what I redeemed (claimant) ----
   const mineNodes = mine.length
     ? mine.map(myClaimRow)
-    : [emptyState('You haven’t requested anything yet.')];
+    : [emptyState('You haven’t redeemed anything yet.')];
 
-  // ---- requests on my items (poster, pending) ----
+  // ---- what people redeemed from me (poster) ----
   const incomingNodes = incoming.length
     ? incoming.map(incomingRow)
-    : [emptyState('No pending requests on your items.')];
+    : [emptyState('Nobody has redeemed one of your offers yet.')];
 
   const root = el('<div class="stack"></div>');
   root.append(

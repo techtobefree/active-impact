@@ -1,10 +1,16 @@
-"""Catalog items (offers/needs) and their claim lifecycle.
+"""Catalog items (offers/needs) and the claim that redeems one.
 
 An offer is a standing, priced good/service (0 = free); a need is unpriced and
-receives tips, not claims. Only active, in-quantity offers can be claimed. A
-claim snapshots the item price at claim time, so later price edits never touch
-existing claims. Tokens move exactly once, on accept: claimant -> poster
-('spend'), in the same tx that decrements quantity and auto-closes at 0.
+receives tips, not claims. Only active, in-quantity offers can be claimed.
+
+**A claim has no lifecycle** (T11). Claiming *is* the redemption: one transaction
+snapshots the price, burns it, decrements quantity, auto-closes at 0, and writes
+the claim already settled. There is nothing to accept, decline or cancel,
+because a listing is binding until the poster withdraws it (T6) -- a poster who
+could refuse an individual would hold a veto the domain says they do not have.
+
+**The tokens are destroyed, not paid** (T12). The poster's return is the burn
+itself: a public record that this much service was honoured here (T5).
 
 See docs/design/API.md § Catalog and DOMAIN.md (invariants I7, I8, I10).
 """
@@ -12,7 +18,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-import psycopg
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
 
@@ -79,12 +84,8 @@ def _get_item(item_id: int) -> dict | None:
     return db.query_one("SELECT * FROM catalog_items WHERE id = %s", (item_id,))
 
 
-def _get_claim(claim_id: int) -> dict | None:
-    return db.query_one("SELECT * FROM catalog_claims WHERE id = %s", (claim_id,))
-
-
 def claim_brief(claim: dict) -> dict:
-    """A claim on its own (claimant + snapshot price + lifecycle)."""
+    """A claim on its own (claimant + the price that was burned for it)."""
     return {
         "id": claim["id"],
         "item_id": claim["item_id"],
@@ -104,7 +105,7 @@ def claim_full(claim: dict, item_row: dict) -> dict:
 
 
 def _item_detail(row: dict, user: dict) -> dict:
-    """item_card + description, image_ids, my_claim, pending_claims_count (poster)."""
+    """item_card + description, image_ids, my_claim, and the poster's burn tally."""
     iid = row["id"]
     out = serializers.item_card(row)
     out["description"] = row["description"]
@@ -116,20 +117,32 @@ def _item_detail(row: dict, user: dict) -> dict:
             (iid,),
         )
     ]
-    # The viewer's own claim: the pending one if any, else their most recent.
+    # The viewer's most recent claim. Nothing to prefer by status any more:
+    # every claim is settled, so the newest one is the live proof.
     mine = db.query_one(
         "SELECT * FROM catalog_claims WHERE item_id = %s AND claimant_id = %s "
-        "ORDER BY (status = 'pending') DESC, created_at DESC, id DESC LIMIT 1",
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
         (iid, user["id"]),
     )
     out["my_claim"] = claim_brief(mine) if mine else None
     if row["poster_id"] == user["id"]:
-        out["pending_claims_count"] = int(
+        # What the poster gets instead of payment (T5). Two separate truths, on
+        # purpose: the count comes from the claims, the tokens from the ledger --
+        # pre-T12 redemptions were paid rather than burned, and this must not
+        # quietly recount them as burns.
+        out["redeemed_count"] = int(
             db.query_one(
                 "SELECT COUNT(*) AS c FROM catalog_claims "
-                "WHERE item_id = %s AND status = 'pending'",
+                "WHERE item_id = %s AND status = 'redeemed'",
                 (iid,),
             )["c"]
+        )
+        out["burned_tokens"] = int(
+            db.query_one(
+                "SELECT COALESCE(SUM(amount), 0) AS s FROM token_entries "
+                "WHERE kind = 'burn' AND catalog_item_id = %s",
+                (iid,),
+            )["s"]
         )
     return out
 
@@ -237,6 +250,12 @@ def update_catalog(
 
 @router.post("/catalog/{item_id}/claim", status_code=201)
 def create_claim(item_id: int, user: dict = Depends(current_user)):
+    """Claim = redeem. One transaction, settled when it returns.
+
+    Every check that guards the settlement is re-run INSIDE the row lock: the
+    cheap ones above it only save a round trip. Two people going for the last
+    unit at once both pass the first read; only one gets past `FOR UPDATE`.
+    """
     item = _get_item(item_id)
     if not item:
         raise api_error(404, "not_found")
@@ -246,17 +265,41 @@ def create_claim(item_id: int, user: dict = Depends(current_user)):
         raise api_error(409, "own_item")
     if item["status"] != "active":
         raise api_error(409, "item_closed")
-    try:
-        with db.tx() as c:
-            claim = c.execute(
-                "INSERT INTO catalog_claims(item_id, claimant_id, price_tokens) "
-                "VALUES (%s, %s, %s) RETURNING *",
-                (item_id, user["id"], item["price_tokens"]),
-            ).fetchone()
-    except psycopg.errors.UniqueViolation:
-        # Partial unique idx_claims_pending: one live claim per user per item.
-        raise api_error(409, "already_claimed")
-    return claim_full(claim, item)
+
+    with db.tx() as c:
+        it = c.execute(
+            "SELECT * FROM catalog_items WHERE id = %s FOR UPDATE", (item_id,)
+        ).fetchone()
+        # Withdrawn, or the last unit went to somebody else while we read.
+        if it["status"] != "active":
+            raise api_error(409, "item_closed")
+
+        # decided_at is stamped at insert: there is no later moment to stamp it.
+        claim = c.execute(
+            "INSERT INTO catalog_claims"
+            "(item_id, claimant_id, price_tokens, status, decided_at) "
+            "VALUES (%s, %s, %s, 'redeemed', now()) RETURNING *",
+            (item_id, user["id"], it["price_tokens"]),
+        ).fetchone()
+
+        # The price as it stands right now -- a later edit never reprices this.
+        # Too poor to redeem rolls the whole thing back: no claim, no decrement.
+        if it["price_tokens"] > 0:
+            tokens.burn(
+                c, user["id"], it["price_tokens"],
+                claim_id=claim["id"], catalog_item_id=it["id"],
+            )
+
+        if it["quantity"] is not None:
+            new_q = it["quantity"] - 1
+            # Auto-close when the last unit goes (I10); 0 is stored truthfully.
+            c.execute(
+                "UPDATE catalog_items SET quantity = %s, status = %s, updated_at = now() "
+                "WHERE id = %s",
+                (new_q, "closed" if new_q == 0 else it["status"], it["id"]),
+            )
+
+    return claim_full(claim, _get_item(item_id))
 
 
 @router.get("/claims")
@@ -266,7 +309,7 @@ def list_claims(
     page: Page = Depends(pagination),
     user: dict = Depends(current_user),
 ):
-    """My claims (claimant, default) or claims on my items (poster), newest first."""
+    """What I redeemed (claimant, default) or what was redeemed from me (poster)."""
     params: list = [user["id"]]
     if role == "poster":
         sql = (
@@ -284,93 +327,6 @@ def list_claims(
     rows = db.query(sql, params)
     return [claim_full(r, _get_item(r["item_id"])) for r in rows]
 
-
-@router.post("/claims/{claim_id}/accept")
-def accept_claim(claim_id: int, user: dict = Depends(current_user)):
-    claim = _get_claim(claim_id)
-    if not claim:
-        raise api_error(404, "not_found")
-    item = _get_item(claim["item_id"])
-    if item["poster_id"] != user["id"]:
-        raise api_error(403, "not_yours")
-
-    with db.tx() as c:
-        cl = c.execute(
-            "SELECT * FROM catalog_claims WHERE id = %s FOR UPDATE", (claim_id,)
-        ).fetchone()
-        if cl["status"] != "pending":
-            raise api_error(409, "claim_not_pending")
-        it = c.execute(
-            "SELECT * FROM catalog_items WHERE id = %s FOR UPDATE", (item["id"],)
-        ).fetchone()
-        # A closed item has no stock to give (auto-closed at 0, or closed by the poster).
-        if it["status"] != "active":
-            raise api_error(409, "quantity_exhausted")
-
-        # Move tokens on the SNAPSHOT price (0 = free -> no ledger entry). An
-        # InsufficientBalance rolls back the whole tx, leaving the claim pending.
-        if cl["price_tokens"] > 0:
-            tokens.transfer(
-                c, cl["claimant_id"], it["poster_id"], cl["price_tokens"], "spend",
-                claim_id=cl["id"], catalog_item_id=it["id"],
-            )
-
-        if it["quantity"] is not None:
-            new_q = it["quantity"] - 1
-            # Auto-close when the last unit is settled (I10); 0 is stored truthfully.
-            c.execute(
-                "UPDATE catalog_items SET quantity = %s, status = %s, updated_at = now() "
-                "WHERE id = %s",
-                (new_q, "closed" if new_q == 0 else it["status"], it["id"]),
-            )
-
-        updated = c.execute(
-            "UPDATE catalog_claims SET status = 'accepted', decided_at = now() "
-            "WHERE id = %s RETURNING *",
-            (claim_id,),
-        ).fetchone()
-
-    return claim_full(updated, _get_item(claim["item_id"]))
-
-
-@router.post("/claims/{claim_id}/decline")
-def decline_claim(claim_id: int, user: dict = Depends(current_user)):
-    claim = _get_claim(claim_id)
-    if not claim:
-        raise api_error(404, "not_found")
-    item = _get_item(claim["item_id"])
-    if item["poster_id"] != user["id"]:
-        raise api_error(403, "not_yours")
-    with db.tx() as c:
-        cl = c.execute(
-            "SELECT status FROM catalog_claims WHERE id = %s FOR UPDATE", (claim_id,)
-        ).fetchone()
-        if cl["status"] != "pending":
-            raise api_error(409, "claim_not_pending")
-        updated = c.execute(
-            "UPDATE catalog_claims SET status = 'declined', decided_at = now() "
-            "WHERE id = %s RETURNING *",
-            (claim_id,),
-        ).fetchone()
-    return claim_full(updated, item)
-
-
-@router.post("/claims/{claim_id}/cancel")
-def cancel_claim(claim_id: int, user: dict = Depends(current_user)):
-    claim = _get_claim(claim_id)
-    if not claim:
-        raise api_error(404, "not_found")
-    if claim["claimant_id"] != user["id"]:
-        raise api_error(403, "not_yours")
-    with db.tx() as c:
-        cl = c.execute(
-            "SELECT status FROM catalog_claims WHERE id = %s FOR UPDATE", (claim_id,)
-        ).fetchone()
-        if cl["status"] != "pending":
-            raise api_error(409, "claim_not_pending")
-        updated = c.execute(
-            "UPDATE catalog_claims SET status = 'canceled', decided_at = now() "
-            "WHERE id = %s RETURNING *",
-            (claim_id,),
-        ).fetchone()
-    return claim_full(updated, _get_item(claim["item_id"]))
+# There is no accept, decline or cancel. Claiming already settled it (T11), and
+# an accepted claim's tokens are gone (T12) -- there is no undo to offer either
+# side. The poster's control is PATCH status='closed', which is forward-only.

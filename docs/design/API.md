@@ -126,7 +126,7 @@ do check in (CHECKIN_PROOF.md P8 / §5.4).
 
 | Endpoint | Notes | Errors |
 |---|---|---|
-| `GET /api/tokens/ledger` 📄 | Entries where I'm `from` or `to`, newest-first, with counterparty `{id, display_name}` resolved, `direction: in\|out` | — |
+| `GET /api/tokens/ledger` 📄 | Entries where I'm `from` or `to`, newest-first, with counterparty `{id, display_name}` resolved, `direction: in\|out`. A `burn` has **no counterparty** (`null`) — the tokens went nowhere; the client names the item instead | — |
 | `POST /api/tokens/tip` | `{to_user_id \| to_email (exactly one), amount, note?, catalog_item_id?}` → **201** entry. UI buttons (profile/need pages) use `to_user_id`; the wallet's free-form send uses `to_email`. Responses never echo an email. `transfer(kind='tip')` — covers tipping AND donating to a need | 404 `user_not_found`; 409 `insufficient_balance`; 409 `cannot_tip_self`; 422 amount < 1 or not-exactly-one recipient |
 
 ## Catalog — `app/catalog.py`
@@ -135,22 +135,24 @@ do check in (CHECKIN_PROOF.md P8 / §5.4).
 |---|---|---|
 | `GET /api/catalog` 📄 | `?kind=offer\|need` `&q=` `&mine=1` `&status=active` (default) — **item_card[]**, newest-first | — |
 | `POST /api/catalog` | `{kind, title, description?, price_tokens?, quantity?}` → **201** detail. `price_tokens` required (≥0) for offers, forbidden for needs (422 `price_on_need` / `price_required`) | 422 |
-| `GET /api/catalog/{id}` | Detail: card + `description`, `image_ids[]`, `my_claim \| null`, `pending_claims_count` (poster only) | 404 |
+| `GET /api/catalog/{id}` | Detail: card + `description`, `image_ids[]`, `my_claim \| null`, `redeemed_count` + `burned_tokens` (poster only) | 404 |
 | `PATCH /api/catalog/{id}` | Poster. `{title?, description?, price_tokens?, quantity?, status?}` (status `closed` to end it; price changes don't touch existing claims — snapshot rules) | 403 `not_yours` |
-| `POST /api/catalog/{id}/claim` | → **201** claim (`pending`, price snapshotted). Active, in-quantity **offers only** (every offer is priced; 0 = free) — needs 409 `not_claimable`; own item 409 `own_item` | 409 `already_claimed`, `item_closed` |
-| `GET /api/claims` 📄 | `?role=claimant` (default: my requests) `\|poster` (requests on my items) `&status=` — with item + counterparty summaries | — |
-| `POST /api/claims/{id}/accept` | Poster. One tx: re-check status/quantity → `transfer(claimant→poster, price, 'spend', claim_id)` (price 0 = no entry, still accepted) → decrement quantity, close item at 0 → `accepted`, `decided_at` | 403; 409 `claim_not_pending`, `insufficient_balance` (claimant's), `quantity_exhausted` |
-| `POST /api/claims/{id}/decline` | Poster → `declined`, `decided_at` | 403; 409 `claim_not_pending` |
-| `POST /api/claims/{id}/cancel` | Claimant → `canceled`, `decided_at` | 403; 409 `claim_not_pending` |
+| `POST /api/catalog/{id}/claim` | **Claiming settles.** One tx: lock the item → re-check active → `burn(claimant, price, claim_id)` (price 0 = no entry) → decrement quantity, close at 0 → **201** claim already `redeemed` with `decided_at`. Active, in-quantity **offers only**; needs 409 `not_claimable`; own item 409 `own_item` | 409 `item_closed`, `insufficient_balance` |
+| `GET /api/claims` 📄 | `?role=claimant` (default: what I redeemed) `\|poster` (what was redeemed from me) `&status=` — with item + counterparty summaries | — |
+
+There is no accept, decline or cancel: a listing is binding until the poster
+withdraws it (T6), so no one is waiting on a decision. Pre-T11 claims left in
+`declined` / `canceled` still read back; nothing writes those states now.
 
 Coupons need no special mechanics: an offer titled "50% off X" priced at N tokens
-— the accepted-claim screen is the proof the claimant shows the business
-(description carries redemption terms). Fulfillment is off-platform trust (D8/D9).
+— the redeemed-claim screen is the proof the claimant shows the business
+(description carries redemption terms). Fulfillment is off-platform trust (D8/D9b).
 
-Service offers (the intent's dentist example) earn the same way: the poster
-prices the offer in tokens and is **paid by claimants** — the catalog never
-system-mints. Minting is exclusive to project checkout (D7); a time-and-place
-charity session can instead be posted as a *project* to earn via check-in.
+Service offers (the intent's dentist example) are **not** an earning route: the
+claimant's tokens are destroyed, not paid over, so posting an offer converts
+tokens into evidence of generosity rather than income (T4/T5). Minting is
+exclusive to project checkout (D7); a business that wants tokens for itself earns
+them the same way everyone does — by showing up to a project and checking in.
 
 ## Service records — `app/records.py`
 
@@ -254,7 +256,6 @@ There is no create/update/delete surface — the list is a side effect.
 | Any authed user (incl. **guest**) | Browse everything; create projects (with a first event); check in via a valid code; RSVP/self check-in to an event; check **self** out; tip; claim offers; edit own profile; **log service records, cheer, and report** |
 | Project **leader** (incl. owner) | All project edits, add events, and per-event QR/code/roster/close, check out anyone there, event-leader designation; add/remove leaders; project images |
 | Project **owner** | Leader powers; irremovable as leader |
-| Item **poster** | Edit/close item, accept/decline claims, item images |
+| Item **poster** | Edit/close item, see who redeemed it, item images. **May not refuse a claim** (T6) |
 | Record **author** | Delete own service record, manage its image |
-| Claimant | Cancel own pending claim |
 | **Nobody** | Mutate ledger entries, waiver rows, others' profiles (no admin exists in MVP — D-deferred) |

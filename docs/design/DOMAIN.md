@@ -31,8 +31,8 @@ users ──┬── sessions                    (opaque bearer tokens, 30-day 
         │                                    │                   source of minutes → tokens)
         │                                    └── attestations   (append-only SIGHTINGS: scanner reports
         │                                                        subject was here — CHECKIN_PROOF.md)
-        ├── catalog_items (poster) ── catalog_claims (pending → accepted/declined/canceled)
-        ├── token_entries              (append-only ledger: earn | tip | spend)
+        ├── catalog_items (poster) ── catalog_claims (redeemed on creation — no pending phase)
+        ├── token_entries              (append-only ledger: earn | tip | spend | burn)
         ├── audit_log                  (append-only audit log: check_in | check_out; carries event + project)
         ├── images                     (BYTEA, polymorphic: project | catalog_item | event | service_record)
         └── service_records ──┬── cheers    (anonymous-first LOG: one photo + one caption)
@@ -360,19 +360,24 @@ CREATE INDEX IF NOT EXISTS idx_events_location ON events(location_id);
 -- ---- impact tokens ----------------------------------------------------------
 
 -- APPEND-ONLY ledger. Never UPDATE, never DELETE (no endpoint may exist).
--- from_user NULL = system mint (kind 'earn'). All amounts positive; direction
--- is the from/to pair. users.balance is updated in the SAME transaction.
+-- All amounts positive; direction is the from/to pair, and BOTH ends are
+-- nullable because a token's two doors are asymmetric only in direction:
+--   from NULL          = minted by the system for service   (kind 'earn')
+--   to   NULL          = burned out of existence on redemption (kind 'burn')
+-- users.balance is updated in the SAME transaction.
 CREATE TABLE IF NOT EXISTS token_entries (
   id               BIGSERIAL PRIMARY KEY,
   from_user_id     INTEGER REFERENCES users(id),          -- NULL = minted by system
-  to_user_id       INTEGER NOT NULL REFERENCES users(id),
+  to_user_id       INTEGER REFERENCES users(id),          -- NULL = burned (no recipient)
   amount           INTEGER NOT NULL CHECK (amount > 0),
-  kind             TEXT NOT NULL CHECK (kind IN ('earn', 'tip', 'spend')),
+  kind             TEXT NOT NULL CHECK (kind IN ('earn', 'tip', 'spend', 'burn')),
   participation_id INTEGER REFERENCES participations(id) ON DELETE SET NULL, -- kind=earn
-  claim_id         INTEGER,                               -- kind=spend (FK added below)
-  catalog_item_id  INTEGER,                               -- optional context for tips to a need
+  claim_id         INTEGER,                               -- kind=burn (FK added below)
+  catalog_item_id  INTEGER,                               -- kind=burn; also tips to a need
   note             TEXT,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Exactly one door, and only a burn may have no recipient.
+  CHECK ((kind = 'burn') = (to_user_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_entries_to   ON token_entries(to_user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_entries_from ON token_entries(from_user_id, id DESC);
@@ -396,22 +401,22 @@ CREATE TABLE IF NOT EXISTS catalog_items (
 CREATE INDEX IF NOT EXISTS idx_catalog_kind   ON catalog_items(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_catalog_poster ON catalog_items(poster_id);
 
--- Claim lifecycle: pending → accepted | declined | canceled. Tokens move ONLY on
--- accept (claimant → poster, kind 'spend'), in the same transaction that
--- decrements quantity and stamps decided_at.
+-- A claim has no lifecycle: it is born 'redeemed' (T11). Creating one burns the
+-- snapshot price out of existence (T12), decrements quantity and stamps
+-- decided_at, all in the same transaction. 'declined' and 'canceled' survive in
+-- the CHECK to keep pre-T11 history legible; no code writes them any more.
 CREATE TABLE IF NOT EXISTS catalog_claims (
   id           SERIAL PRIMARY KEY,
   item_id      INTEGER NOT NULL REFERENCES catalog_items(id) ON DELETE CASCADE,
   claimant_id  INTEGER NOT NULL REFERENCES users(id),
   price_tokens INTEGER NOT NULL CHECK (price_tokens >= 0),  -- snapshot at claim time
-  status       TEXT NOT NULL DEFAULT 'pending'
-               CHECK (status IN ('pending', 'accepted', 'declined', 'canceled')),
+  status       TEXT NOT NULL DEFAULT 'redeemed'
+               CHECK (status IN ('redeemed', 'declined', 'canceled')),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   decided_at   TIMESTAMPTZ
 );
--- One live claim per user per item.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_pending
-  ON catalog_claims(item_id, claimant_id) WHERE status = 'pending';
+-- (No unique index: the old one covered pending rows, which no longer exist.
+-- Redeeming twice is redeeming twice — the poster bounds it with quantity.)
 CREATE INDEX IF NOT EXISTS idx_claims_claimant ON catalog_claims(claimant_id);
 CREATE INDEX IF NOT EXISTS idx_claims_item     ON catalog_claims(item_id);
 
@@ -529,22 +534,38 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 ## Token accounting
 
-**Two primitives in `app/tokens.py` — the only code that writes `token_entries`
-or `users.balance`.** Both run inside a single `tx()`:
+**Three primitives in `app/tokens.py` — the only code that writes `token_entries`
+or `users.balance`.** Each runs inside a single `tx()`. They are the token's only
+two doors plus the one sideways move between them: `mint` in, `burn` out,
+`transfer` across.
 
 ```
 mint(c, to_user, amount, participation_id, note=None)
-  → INSERT token_entries(from NULL, to, amount, 'earn', participation_id)
   → UPDATE users SET balance = balance + amount WHERE id = to_user
+  → INSERT token_entries(from NULL, to, amount, 'earn', participation_id)
 
 transfer(c, from_user, to_user, amount, kind, claim_id=None, catalog_item_id=None, note=None)
-  # kind ∈ {'tip', 'spend'}
+  # kind ∈ {'tip'}  — 'spend' is pre-T12 history; redemption burns now
   → UPDATE users SET balance = balance - amount
       WHERE id = from_user AND balance >= amount     -- atomic overdraft guard
     (rowcount 0 → raise InsufficientBalance → HTTP 409 'insufficient_balance')
   → UPDATE users SET balance = balance + amount WHERE id = to_user
   → INSERT token_entries(from, to, amount, kind, …)
+
+burn(c, from_user, amount, claim_id=None, catalog_item_id=None, note=None)
+  → UPDATE users SET balance = balance - amount
+      WHERE id = from_user AND balance >= amount     -- same atomic guard
+    (rowcount 0 → raise InsufficientBalance → HTTP 409 'insufficient_balance')
+  → INSERT token_entries(from, to NULL, amount, 'burn', …)
+  # No credit half. The supply shrinks; nobody is paid.
 ```
+
+**Who a burn was *for*.** The tokens go nowhere, but the redemption still points
+at somebody: the poster of the item that was redeemed, reachable by joining
+`token_entries → catalog_claims → catalog_items.poster_id`. That join is the
+Postgres stand-in for the contract's `burnedFor[address]` counter
+([TOKEN_ONCHAIN.md](../ideas/TOKEN_ONCHAIN.md) T12), and it is deliberately
+*derived* rather than stored — there is one fact here, not two that can disagree.
 
 ### Checkout math (exact — half-up, capped)
 
@@ -573,13 +594,14 @@ volunteers (flat rate is intent).
 | # | Invariant |
 |---|-----------|
 | I1 | `users.balance` = Σ entries in − Σ entries out for every user, always ≥ 0 |
+| I1b | Circulating supply = Σ `earn` − Σ `burn` = Σ all balances. Tokens enter only through service and leave only through redemption; a `tip` moves one between people and changes neither side of that equation (T1) |
 | I2 | `token_entries` is append-only: no UPDATE/DELETE code path exists — asserted by a static source check that only `app/tokens.py` writes the table (BUILD_PLAN M4) |
 | I3 | At most one open participation per (event, user) — enforced by partial unique index |
 | I4 | `minutes`/`tokens_awarded` are set exactly once, **atomically** with `checked_out_at` — the checkout UPDATE is guarded `… WHERE checked_out_at IS NULL`, so concurrent checkouts (double-tap / self-vs-leader / checkout-vs-close) mint once, never twice |
 | I5 | Waiver rows are never mutated; a text edit inserts version n+1 |
 | I6 | Every participation's `waiver_id` belongs to its event's `project_id` (waivers are project-scoped; check-in pins the event's project's current waiver) |
-| I7 | Claims only transition `pending → accepted/declined` (by poster) or `pending → canceled` (by claimant); `decided_at` stamped exactly then |
-| I8 | An accepted claim with price > 0 ↔ exactly one `spend` entry with that `claim_id`; declined/canceled claims have none |
+| I7 | A claim has no transitions: it is inserted `redeemed` with `decided_at` already stamped, and is never updated. No endpoint accepts, declines or cancels one (T11) |
+| I8 | A claim with price > 0 ↔ exactly one `burn` entry with that `claim_id`; price 0 has none. A burn's `to_user_id` is NULL — the poster is credited with the *deed*, never the tokens (T12) |
 | I9 | Transfer with insufficient balance changes **nothing** (no entry, no balance drift) |
 | I10 | Only active, in-quantity `offer`s can be claimed (every offer is priced; 0 = free); quantity hits 0 → item `closed` |
 | I11 | Check-in requires the presented `checkin_code` to match an `open` event |
