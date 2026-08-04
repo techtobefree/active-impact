@@ -10,6 +10,10 @@
 > into `docs/design/`, §1 moves with it unchanged. Nothing in a conversation
 > about the domain should have to be asked twice.
 >
+> **How this document is built:** one question at a time, at the broadest level
+> still unresolved. Detail questions are not asked until the fork above them is
+> settled — most of them turn out not to exist.
+>
 > Started 2026-08-03.
 
 ---
@@ -200,6 +204,14 @@ that must never change are kept apart from the parts that should be free to.
 Mint must therefore be able to target **any** address from day one, even though
 today it only ever targets the treasury. Otherwise the future T10 was bought to
 keep open is closed by an argument list.
+
+### Q3a. Does every user get an address? — OPEN, and the next fork
+
+Directly downstream of T13. If every account gets an address at sign-up, then
+attribution always has a target and several questions below simply disappear. If
+addresses are optional, burns can be unattributed and the leaderboard has holes.
+
+Nothing more detailed than this should be decided until it is.
 
 ### Q3b. If names are permissionless, what stops impersonation? — OPEN
 
