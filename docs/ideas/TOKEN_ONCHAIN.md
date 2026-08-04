@@ -37,6 +37,7 @@ decisions, so they can be cited from code and from other docs.
 | **T11** | **Claiming an offer settles immediately — accept/decline is removed.** The claimant claims, the price is taken, the quantity decrements, done. The poster's only control is withdrawing or bounding the listing. | 2026-08-03 | The shipped catalog (`OVERVIEW.md` **D9**) let a poster accept or decline each claim, which is the exact opposite of T6. This supersedes D9 for offers. **Note:** every offer in this app is already priced (0 = free), and needs are never claimable — so "token-priced offers" is all offers, and there is no subset to carve out. |
 | **T12** | **Redemption BURNS the price. It does not pay the business.** This is how tokens leave existence (T1) and it supersedes the shipped `transfer(claimant → poster)`. **How the burn is attributed to a business is still open — see Q2c.** | 2026-08-03 | *"It is a burn, we've decided that, this is how the tokens leave existence."* Paying the business would give them a balance to spend or tip onward, which contradicts T4, and would leave no burn total to publish — the number the whole model exists to produce. |
 | **T13** | **There is no "business" account type. You burn FOR AN ADDRESS.** Anyone may receive burn credit; a business is just an address that happens to belong to a business. Names are claimed socially — the business tells people, publishes it, and we can show it — not granted by us. If there is no address, the tokens burn to nothing. | 2026-08-03 | *"I'm trying to remove all the barriers… you don't need to go get a business account and ask us pretty please."* Consistent with everything else here: guest-first, no email required, anyone can post a project. A gated business account would be the first place in the app where somebody has to ask permission. Address-as-identity is also the chain's own primitive, so no parallel id registry has to be kept in sync — and the record stops being captive to this platform, because another app burning to the same address adds to the same total. |
+| **T14** | **Every user gets an address.** Not just businesses — every account has one, from the start. | 2026-08-04 | Keeps T13 whole: attribution always has a target, so no burn is ever orphaned and the leaderboard has no holes. It also means "business" never has to become a thing, since the only thing that distinguishes one is what its address has burned. |
 | **T8** | **An uncollected claim stays burned.** No expiry, no refund, no pickup confirmation. The business keeps the credit even if the goods never left the shelf. | 2026-08-03 | *"We're essentialists here — we're doing the simplest solution and we can evolve into stuff like that later."* Every alternative buys accuracy with a mechanism: expiry means re-minting and a counter that can go **down**, so "burned" would stop being final; confirmation adds a step to every redemption to fix a case that may be rare. Ship the simple thing, watch the drift, and only pay for accuracy if it turns out to matter. |
 
 ### Leaning, but NOT decided
@@ -205,13 +206,16 @@ Mint must therefore be able to target **any** address from day one, even though
 today it only ever targets the treasury. Otherwise the future T10 was bought to
 keep open is closed by an argument list.
 
-### Q3a. Does every user get an address? — OPEN, and the next fork
+### Q3a. Does every user get an address? — ANSWERED by T14: yes, everyone.
 
-Directly downstream of T13. If every account gets an address at sign-up, then
-attribution always has a target and several questions below simply disappear. If
-addresses are optional, burns can be unattributed and the leaderboard has holes.
+Dissolves the unattributed-burn problem entirely: T13's "burns to nothing if there
+is no address" becomes a case that cannot arise.
 
-Nothing more detailed than this should be decided until it is.
+### Q3a-next. Who holds the key? — OPEN, and the next fork
+
+Everything about what a user can eventually *do* with their address hangs off
+this, including whether T10's preserved option — minting straight to volunteers —
+is ever reachable.
 
 ### Q3b. If names are permissionless, what stops impersonation? — OPEN
 
