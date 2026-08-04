@@ -53,6 +53,35 @@ test.describe('Catalog', () => {
     await expectNoGenericError(page);
   });
 
+  // Self-sufficient (no seed data), so this one runs against production too: the
+  // settlement is a single transaction, and a claimant who cannot cover the
+  // price must leave nothing behind — no claim, no decrement, no tokens.
+  test('a claim you cannot afford is refused, and nothing is left behind', async ({ page }, testInfo) => {
+    const title = 'E2E Too Dear ' + uname('t');
+    await registerUI(page, uemail('richsell'), 'password123', 'Pricey Seller');
+    await postOffer(page, title, 9);
+    const itemUrl = page.url();
+
+    await logoutUI(page);
+    await registerUI(page, uemail('brokebuy'), 'password123', 'Broke Buyer');
+    await page.goto(itemUrl);
+    page.once('dialog', (d) => d.accept());
+    await page.getByRole('button', { name: /claim for 9/i }).click();
+
+    // The specific message, not a generic failure.
+    await expect(page.getByText(/don't have enough tokens/i)).toBeVisible();
+    await expect(page.getByText(/show this screen as proof/i)).toHaveCount(0);
+    await shot(page, testInfo, 'cannot-afford');
+    await expectNoGenericError(page);
+
+    // Reload: the refusal was real, not just a toast. Still claimable, and the
+    // quantity/stock story is unchanged.
+    await page.reload();
+    await expect(page.getByRole('button', { name: /claim for 9/i })).toBeVisible();
+    await expect(page.getByText(/redeemed/i)).toHaveCount(0);
+    await expectNoGenericError(page);
+  });
+
   test('claiming a priced offer burns the tokens — the poster is not paid', async ({ page }, testInfo) => {
     const title = 'E2E Bike Tune ' + uname('t');
 
